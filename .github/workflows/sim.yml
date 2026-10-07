@@ -21,6 +21,7 @@ jobs:
 
       - name: Build for simulator
         run: |
+          set -o pipefail
           xcodebuild -project Xinghai.xcodeproj -scheme Xinghai \
             -configuration Debug -sdk iphonesimulator -derivedDataPath dd \
             CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -5

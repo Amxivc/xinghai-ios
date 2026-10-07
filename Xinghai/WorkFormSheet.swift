@@ -105,7 +105,11 @@ struct WorkFormSheet: View {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { save() }.fontWeight(.semibold)
+                    Button {
+                        save()
+                    } label: {
+                        Text("保存").fontWeight(.semibold)
+                    }
                 }
             }
             .confirmationDialog("删除工作记录", isPresented: $showDelete) {

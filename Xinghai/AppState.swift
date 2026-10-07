@@ -16,6 +16,10 @@ final class AppState: ObservableObject {
     @Published var sbUser: String? = nil
     @Published var sbAdmin = false
 
+    @Published var saving = false
+    @Published var toast: String? = nil
+    private var toastWork: DispatchWorkItem? = nil
+
     private let d = UserDefaults.standard
 
     var cbToken: String {
@@ -67,6 +71,84 @@ final class AppState: ObservableObject {
             sbAdmin = d.bool(forKey: "sb_admin")
         }
         loadCache()
+        // 启动后台静默刷新：缓存先上屏，云端数据回来后自动替换
+        load()
+    }
+
+    /* ================= 轻提示 ================= */
+
+    func showToast(_ s: String) {
+        toastWork?.cancel()
+        withAnimation { toast = s }
+        let w = DispatchWorkItem { [weak self] in
+            withAnimation { if self?.toast == s { self?.toast = nil } }
+        }
+        toastWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4, execute: w)
+    }
+
+    /// Course / WorkRow 是 class，原地修改不会触发刷新；改完调这个
+    func poke() {
+        persons = persons
+        works = works
+    }
+
+    /* ================= 保存到云端 ================= */
+
+    /// 乐观更新：调用方先改内存数据，失败时由 revert 回滚现场。
+    func saveData(_ okMsg: String, revert: (() -> Void)? = nil) {
+        guard !saving else {
+            revert?()
+            showToast("正在保存，请稍候")
+            return
+        }
+        saving = true
+        let personsSnapshot = persons
+        let worksSnapshot = works
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let payload = M.toJson(persons: personsSnapshot, works: worksSnapshot)
+            var cbOk = false, sbOk = false
+            var cbMsg = "未登录腾讯云", sbMsg = "未登录 Supabase"
+            if !self.cbToken.isEmpty {
+                do { try Cloud.cbWrite(payload, token: self.cbToken); cbOk = true }
+                catch { cbMsg = AppState.translate(error) }
+            }
+            if !self.sbToken.isEmpty {
+                do { try Cloud.sbWrite(payload, token: self.sbToken); sbOk = true }
+                catch { sbMsg = AppState.translate(error) }
+            }
+            let ok = cbOk || sbOk
+            var msg = ""
+            if ok {
+                if cbOk && sbOk { msg = "已保存到腾讯云 + Supabase" }
+                else if cbOk { msg = self.sbToken.isEmpty ? "已保存到腾讯云"
+                    : "已保存到腾讯云（Supabase 失败：\(sbMsg)）" }
+                else { msg = self.cbToken.isEmpty ? "已保存到 Supabase"
+                    : "已保存到 Supabase（腾讯云失败：\(cbMsg)）" }
+            } else if self.cbToken.isEmpty && self.sbToken.isEmpty {
+                msg = "请先登录再保存"
+            } else {
+                msg = "保存失败：" + (self.cbToken.isEmpty ? sbMsg : cbMsg)
+            }
+            DispatchQueue.main.async {
+                self.saving = false
+                if ok {
+                    self.saveCache(payload)
+                    if !self.cbToken.isEmpty { self.dataSource = "cb" }
+                    else if !self.sbToken.isEmpty { self.dataSource = "sb" }
+                    let f = DateFormatter()
+                    f.dateFormat = "MM-dd HH:mm"
+                    self.dataUpdatedAt = f.string(from: Date())
+                    self.poke()
+                    self.showToast(okMsg.isEmpty ? msg : okMsg + "（" + msg + "）")
+                } else {
+                    revert?()
+                    self.poke()
+                    self.showToast(msg)
+                }
+            }
+        }
     }
 
     /* ================= 数据读取 ================= */

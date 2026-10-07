@@ -163,6 +163,24 @@ enum M {
         return String(format: "%04d-%02d-%02d", c.year ?? 2026, c.month ?? 1, c.day ?? 1)
     }
 
+    static func isoToDate(_ s: String) -> Date {
+        guard let (y, m, d) = parseYmd(s) else { return Date() }
+        return Calendar.current.date(from: DateComponents(year: y, month: m, day: d)) ?? Date()
+    }
+
+    static func dateToIso(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        return String(format: "%04d-%02d-%02d", c.year ?? 2026, c.month ?? 1, c.day ?? 1)
+    }
+
+    static func hmToDate(_ s: String) -> Date {
+        let a = s.components(separatedBy: ":")
+        var c = DateComponents()
+        c.hour = Int(a.first ?? "") ?? 9
+        c.minute = a.count > 1 ? (Int(a[1]) ?? 0) : 0
+        return Calendar.current.date(from: c) ?? Date()
+    }
+
     /// 解析 yyyy-MM-dd（也接受 yyyy/MM/dd、yyyy.MM.dd）
     static func parseYmd(_ s: String?) -> (Int, Int, Int)? {
         guard let s = s?.trimmingCharacters(in: .whitespaces),
@@ -239,6 +257,11 @@ enum M {
         if s.isEmpty { return -1 }
         let a = s.components(separatedBy: ":")
         return (Int(a[0]) ?? 0) * 60 + (Int(a[1]) ?? 0)
+    }
+
+    /// 自定义时间折算节次（编辑器保存时使用）
+    static func sectionFor(_ v: String, _ isEnd: Bool) -> Int {
+        sectionForClock(v, isEnd)
     }
 
     private static func sectionForClock(_ v: String, _ isEnd: Bool) -> Int {

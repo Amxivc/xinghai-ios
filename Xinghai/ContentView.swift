@@ -24,6 +24,25 @@ struct ContentView: View {
                 .tabItem { Label("我的", systemImage: "person.crop.circle") }
                 .tag(2)
         }
+        .overlay(alignment: .top) { toastView }
+        .animation(.easeInOut(duration: 0.25), value: app.toast)
+    }
+
+    @ViewBuilder
+    private var toastView: some View {
+        if let t = app.toast {
+            Text(t)
+                .font(.footnote)
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(Capsule().fill(Color.black.opacity(0.78)))
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+                .transition(.opacity)
+                .zIndex(99)
+        }
     }
 }
 

@@ -1,0 +1,52 @@
+name: Build IPA
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project Xinghai.xcodeproj \
+            -scheme Xinghai \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Xinghai.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tail -n 60
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R "build/Xinghai.xcarchive/Products/Applications/Xinghai.app" build/Payload/
+          cd build
+          zip -qry Xinghai-unsigned.ipa Payload
+          ls -lh Xinghai-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xinghai-unsigned-ipa
+          path: build/Xinghai-unsigned.ipa
+          retention-days: 30

@@ -1,0 +1,8 @@
+build/
+Payload/
+*.ipa
+*.xcarchive
+xcuserdata/
+DerivedData/
+.DS_Store
+Xinghai.xcodeproj

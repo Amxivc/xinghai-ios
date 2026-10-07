@@ -215,7 +215,8 @@ final class AppState: ObservableObject {
             if mode == 0 || mode == 2 {
                 do {
                     let a = try Cloud.cbSignIn(username: user, password: password)
-                    let admin = try Cloud.cbIsAdmin(uid: a.uid, token: a.token)
+                    // 与安卓端一致：管理员校验失败不阻断登录（否则网络抖动会被误报成登录失败）
+                    let admin = (try? Cloud.cbIsAdmin(uid: a.uid, token: a.token)) ?? false
                     self.d.set(a.token, forKey: "cb_token")
                     self.d.set(a.refresh, forKey: "cb_refresh")
                     self.d.set(user, forKey: "cb_user")
@@ -233,7 +234,7 @@ final class AppState: ObservableObject {
             if mode == 1 || mode == 2 {
                 do {
                     let a = try Cloud.sbSignIn(email: email, password: password)
-                    let admin = try Cloud.sbIsAdmin(uid: a.uid, token: a.token)
+                    let admin = (try? Cloud.sbIsAdmin(uid: a.uid, token: a.token)) ?? false
                     self.d.set(a.token, forKey: "sb_token")
                     self.d.set(a.refresh, forKey: "sb_refresh")
                     self.d.set(a.user, forKey: "sb_user")

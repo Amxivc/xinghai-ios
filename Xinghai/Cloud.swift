@@ -34,8 +34,17 @@ enum Net {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 20
+        // 与安卓端 Net.java 对齐：Accept 始终带；有 body 时必须声明 JSON，
+        // 否则 Supabase(GoTrue) 回 "Could not parse request body as JSON"，
+        // 腾讯云网关的 OIDC 层也会解析失败。
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        if let body = body { req.httpBody = body.data(using: .utf8) }
+        if let body = body {
+            if req.value(forHTTPHeaderField: "Content-Type") == nil {
+                req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            }
+            req.httpBody = body.data(using: .utf8)
+        }
 
         var outData: Data?
         var outStatus = 0
@@ -83,9 +92,9 @@ enum Cloud {
     static let cbEnv = "xh-yjxcb-d6g4mu0b64c1e26e5"
     static let cbBase = "https://" + cbEnv + ".api.tcloudbasegateway.com"
     static let cbKey =
-        "eyJhbGciOiJSUzI1NiIsImtpZCI6IjNlZmNiZGMwLWJmODQtNGMwZC1iNzMyLTU2YWI5ODY5YjViOCJ9." +
-        "eyJpc3MiOiJodHRwczovL3hoLXlqeGNiLWQ2ZzRtdTBiNjRjMWUyNmU1LmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJ4aC15anhjYi1kNmc0bXUwYjY0YzFlMjZlNSIsImV4cCI6NDA5NDk1OTYzNCwiaWF0IjoxNzkxMjc2NDM0LCJub25jZSI6InpFMVNUYnJWUTMyVGhBejNrNFhiM0EiLCJhdF9oYXNoIjoiekUxU1RiclZRMzJUaEF6M2s0WGIzQSIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJ4aC15anhjYi1kNmc0bXUwYjY0YzFlMjZlNSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbnltb3VzIiwiaXNfYW5vbnltb3VzIjp0cnVlLCJhcHBfbWV0YWRhdGEiOnsicHJvdmlkZXIiOiJhbm9ueW1vdXMiLCJwcm92aWRlcnMiOlsiYW5vbnltb3VzIl19LCJ1c2VyX21ldGFkYXRhIjp7Im5hbWUiOiJBbm9ueW1vdXNInSwidXNlcl90eXBlIjoiIiwiY2xpZW50X3R5cGUiOiJjbGllbnRfdXNlciIsImlzX3N5c3RlbV9hZG1pbiI6ZmFsc2V9." +
-        "Drl3zM75XGMK_xkSRgJTIGZzy6xdT4sYajQft6euKeCwUC0Vzc0NAti4V8L3fVt9GYZlN2txkkoG4CMrMuGfNPY7ZFZJ8MdWxtPdMyTKyGh4pzbTa5LVJo4TBgZYt1rdd1lup2XS8mMdfvOVjPCiMrBiLlyErEAhdnB9LXx53KDGSXqqt_lyopRMWOBH_B9o-bRO4DQC5s15zWRoLQ6ZeikM32UHIw__bs3HtvVtSpU7yLm9dlkUgkUH0tbHmCa06srVzK4ZANbaUhnfex7y32q6nR5xbRQgnCppz04j-OgimFb79XT7GJ7z4dGhDVMwFyJVStR6C69ApBDkfjAkWw"
+        "eyJhbGciOiJSUzI1NiIsImtpZCI6IjNlZmNiZGMwLWJmODQtNGMwZC1iNzMyLTU2YWI5ODY5YjViOCJ9.eyJpc3MiOiJodHRwczovL3hoLXlqeGNiLWQ2ZzRtdTBiNjRjMWUyNmU1LmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJ4aC15anhjYi1kNmc0bXUwYjY0YzFlMjZlNSIsImV4cCI6NDA5NDk1OTYzNCwiaWF0IjoxNzkxMjc2NDM0LCJub25jZSI6InpFMVNUYnJWUTMyVGhBejNrNFhiM0EiLCJhdF9oYXNoIjoiekUxU1RiclZRMzJUaEF6M2s0WGIzQSIsIm5hbWU" +
+        "iOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJ4aC15anhjYi1kNmc0bXUwYjY0YzFlMjZlNSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN" +
+        "0ZW1fYWRtaW4iOmZhbHNlfQ.Drl3zM75XGMK_xkSRgJTIGZzy6xdT4sYajQft6euKeCwUC0Vzc0NAti4V8L3fVt9GYZlN2txkkoG4CMrMuGfNPY7ZFZJ8MdWxtPdMyTKyGh4pzbTa5LVJo4TBgZYt1rdd1lup2XS8mMdfvOVjPCiMrBiLlyErEAhdnB9LXx53KDGSXqqt_lyopRMWOBH_B9o-bRO4DQC5s15zWRoLQ6ZeikM32UHIw__bs3HtvVtSpU7yLm9dlkUgkUH0tbHmCa06srVzK4ZANbaUhnfex7y32q6nR5xbRQgnCppz04j-OgimFb79XT7GJ7z4dGhDVMwFyJVStR6C69ApBDkfjAkWw"
 
     static let sbUrl = "https://jcaobupbubldipbrzfuo.supabase.co"
     static let sbKey = "sb_publishable_B0aV4XzeALxax8YqzedegQ_ZBu-ewgD"

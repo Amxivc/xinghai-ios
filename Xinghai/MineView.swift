@@ -84,8 +84,13 @@ struct MineView: View {
                 HStack {
                     if app.loading { ProgressView().padding(.trailing, 6) }
                     Text(app.loading ? "同步中…" : "立即同步")
+                        .font(.subheadline.weight(.medium))
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
             }
+            .liquidGlass(cornerRadius: 12)
+            .buttonStyle(.plain)
             .disabled(app.loading)
         }
     }
@@ -95,7 +100,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.1")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.2（液态玻璃）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }
@@ -160,9 +165,13 @@ struct LoginSheet: View {
                             }
                             Text(busy ? "登录中…" : "登  录")
                                 .font(.body.weight(.medium))
+                                .foregroundColor(.blue)
                             Spacer()
                         }
+                        .padding(.vertical, 6)
                     }
+                    .liquidGlass(cornerRadius: 14)
+                    .buttonStyle(.plain)
                     .disabled(busy || email.isEmpty || password.isEmpty)
                 }
             }

@@ -31,6 +31,9 @@ struct CalendarView: View {
                 .buttonStyle(.borderless)
             Spacer()
             Text("\(String(year)) 年 \(month) 月").font(.headline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .liquidGlassCapsule()
             Spacer()
             Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(.borderless)
@@ -41,8 +44,11 @@ struct CalendarView: View {
                 month = c.month ?? month
                 selDay = M.todayIso()
             }
-            .font(.subheadline)
-            .buttonStyle(.borderless)
+            .font(.subheadline.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .liquidGlassCapsule()
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

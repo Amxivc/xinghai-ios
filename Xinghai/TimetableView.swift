@@ -48,6 +48,8 @@ struct TimetableView: View {
                     .font(.caption2).foregroundColor(.secondary)
             }
             .frame(minWidth: 110)
+            .padding(.vertical, 4)
+            .liquidGlass(cornerRadius: 14)
 
             Button {
                 if week < M.TOTAL_WEEKS { week += 1 }
@@ -57,8 +59,11 @@ struct TimetableView: View {
             .buttonStyle(.borderless)
 
             Button("今天") { week = M.currentWeek }
-                .font(.subheadline)
-                .buttonStyle(.borderless)
+                .font(.subheadline.weight(.medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .liquidGlassCapsule()
+                .buttonStyle(.plain)
 
             Spacer()
 
@@ -81,6 +86,9 @@ struct TimetableView: View {
                 }
                 .font(.subheadline)
                 .foregroundColor(.blue)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .liquidGlassCapsule()
             }
         }
         .padding(.horizontal, 14)

@@ -1,0 +1,49 @@
+name: simulator-screenshots
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  sim:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build for simulator
+        run: |
+          xcodebuild -project Xinghai.xcodeproj -scheme Xinghai \
+            -configuration Debug -sdk iphonesimulator -derivedDataPath dd \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -5
+
+      - name: Boot simulator, install app, take screenshots
+        run: |
+          set -x
+          # 选第一台可用 iPhone 模拟器
+          DEV=$(xcrun simctl list devices available | grep -E "iPhone" | head -1 | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          echo "device=$DEV"
+          xcrun simctl bootstatus "$DEV" -b
+          APP="dd/Build/Products/Debug-iphonesimulator/Xinghai.app"
+          xcrun simctl install "$DEV" "$APP"
+          mkdir -p shots
+          for T in 0 1 2; do
+            xcrun simctl terminate "$DEV" com.xinghai.musicpub || true
+            xcrun simctl launch "$DEV" com.xinghai.musicpub -tab $T
+            sleep 14   # 等云端数据加载
+            xcrun simctl io "$DEV" screenshot shots/tab$T.png
+          done
+          xcrun simctl shutdown "$DEV" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshots
+          path: shots/

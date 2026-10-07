@@ -2,15 +2,27 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject private var app = AppState.shared
+    @State private var tab = ContentView.launchTab
+
+    /// 调试用：启动参数 -tab 0/1/2 可直接打开指定页（云端模拟器截图用）
+    static var launchTab: Int {
+        if let idx = ProcessInfo.processInfo.arguments.drop(while: { $0 != "-tab" }).dropFirst().first {
+            return min(max(Int(idx) ?? 0, 0), 2)
+        }
+        return 0
+    }
 
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             TimetableView()
                 .tabItem { Label("课表", systemImage: "tablecells") }
+                .tag(0)
             CalendarView()
                 .tabItem { Label("台历", systemImage: "calendar") }
+                .tag(1)
             MineView()
                 .tabItem { Label("我的", systemImage: "person.crop.circle") }
+                .tag(2)
         }
     }
 }

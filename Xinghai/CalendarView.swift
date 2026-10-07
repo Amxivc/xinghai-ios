@@ -61,8 +61,7 @@ struct CalendarView: View {
     /* ================= 月历网格 ================= */
 
     private var monthGrid: some View {
-        let daysInMonth = Calendar.current.range(of: .day, in: .month,
-                                                 for: Calendar.current.date(from: DateComponents(year: year, month: month)))?.count ?? 30
+        let daysInMonth = M.daysInMonth(year: year, month: month)
         let firstWeekday = { () -> Int in
             guard let first = Calendar.current.date(from: DateComponents(year: year, month: month, day: 1)) else { return 0 }
             let wd = Calendar.current.component(.weekday, from: first)   // 1=周日

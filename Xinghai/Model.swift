@@ -97,6 +97,14 @@ enum M {
     static let days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     static let TOTAL_WEEKS = 21
 
+    /// 某年某月的天数（解包失败兜底 30）
+    static func daysInMonth(year: Int, month: Int) -> Int {
+        var c = DateComponents(year: year, month: month)
+        guard let date = Calendar.current.date(from: c),
+              let range = Calendar.current.range(of: .day, in: .month, for: date) else { return 30 }
+        return range.count
+    }
+
     /// 学期首日：2026-08-24
     static let startComponents = DateComponents(year: 2026, month: 8, day: 24)
 

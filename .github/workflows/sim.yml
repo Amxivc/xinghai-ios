@@ -43,7 +43,20 @@ jobs:
           done
           xcrun simctl shutdown "$DEV" || true
 
+      - name: Zip simulator app (Appetize.io 需要的格式)
+        run: |
+          cd dd/Build/Products/Debug-iphonesimulator
+          mkdir -p ../../../../out
+          zip -r -y ../../../../out/Xinghai-simulator.zip Xinghai.app
+          unzip -l ../../../../out/Xinghai-simulator.zip | head -5
+          ls -la ../../../../out/
+
       - uses: actions/upload-artifact@v4
         with:
           name: simulator-screenshots
           path: shots/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Xinghai-simulator-app
+          path: out/Xinghai-simulator.zip

@@ -1,11 +1,20 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TimetableView: View {
     @ObservedObject private var app = AppState.shared
     @State private var week = M.currentWeek
+    /// 按日期跳转后聚焦的星期几（0 = 不聚焦）
+    @State private var pickedDay = 0
     @State private var personIdx = 0
     @State private var activeSheet: TSheet? = nil
     @State private var shareItem: ShareItem? = nil
+    @State private var showJump = false
+    @State private var showMembers = false
+    @State private var showTimeSearch = false
+    @State private var showImporter = false
+    @State private var pendingCourses: [Course] = []
+    @State private var showImportConfirm = false
 
     private var person: Person? {
         if app.persons.indices.contains(personIdx) {
@@ -39,6 +48,41 @@ struct TimetableView: View {
         }
         .sheet(item: $shareItem) { si in
             ShareSheet(items: [si.url])
+        }
+        .sheet(isPresented: $showJump) {
+            JumpSheet(week: $week, pickedDay: $pickedDay)
+        }
+        .sheet(isPresented: $showMembers) {
+            MemberSheet()
+        }
+        .sheet(isPresented: $showTimeSearch) {
+            TimeSearchSheet()
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: Import.xlsxTypes) { result in
+            guard case .success(let url) = result else {
+                app.showToast("没有选择文件")
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let r = Import.loadCourses(from: url)
+                DispatchQueue.main.async {
+                    if !r.error.isEmpty {
+                        app.showToast("导入失败：\(r.error)")
+                    } else if r.courses.isEmpty {
+                        app.showToast("没有识别到有效课程，请确认是原始课表格式。")
+                    } else {
+                        pendingCourses = r.courses
+                        showImportConfirm = true
+                    }
+                }
+            }
+        }
+        .alert("导入课表", isPresented: $showImportConfirm) {
+            Button("取消", role: .cancel) { pendingCourses = [] }
+            Button("替换") { applyImport() }
+        } message: {
+            Text("已识别 \(pendingCourses.count) 条课程记录。\n\n"
+                 + "确定用该文件替换「\(person?.name ?? "当前成员")」现有课表吗？")
         }
     }
 
@@ -77,18 +121,15 @@ struct TimetableView: View {
         HStack(spacing: 8) {
             Button {
                 if week > 1 { week -= 1 }
+                pickedDay = 0
             } label: {
                 Image(systemName: "chevron.left").font(.body)
             }
             .buttonStyle(.borderless)
 
-            // 点标题直选周次
-            Menu {
-                ForEach(1...M.TOTAL_WEEKS, id: \.self) { w in
-                    Button(w == M.currentWeek ? "第 \(w) 周（本周）" : "第 \(w) 周") {
-                        week = w
-                    }
-                }
+            // 点标题：显示周次 / 按日期定位
+            Button {
+                showJump = true
             } label: {
                 VStack(spacing: 2) {
                     Text("第 \(week) 周").font(.headline)
@@ -99,15 +140,20 @@ struct TimetableView: View {
                 .padding(.vertical, 4)
                 .liquidGlass(cornerRadius: 14)
             }
+            .buttonStyle(.plain)
 
             Button {
                 if week < M.TOTAL_WEEKS { week += 1 }
+                pickedDay = 0
             } label: {
                 Image(systemName: "chevron.right").font(.body)
             }
             .buttonStyle(.borderless)
 
-            Button("今天") { week = M.currentWeek }
+            Button("今天") {
+                week = M.currentWeek
+                pickedDay = M.todayDay()
+            }
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -116,7 +162,7 @@ struct TimetableView: View {
 
             Spacer()
 
-            // 操作表：新增课程 / 导出
+            // 操作表：新增课程 / 导入课表 / 成员管理 / 时间查找 / 导出
             Menu {
                 if app.isAdmin {
                     Button {
@@ -127,11 +173,26 @@ struct TimetableView: View {
                     } label: {
                         Label("新增课程", systemImage: "plus.circle")
                     }
+                    Button {
+                        showImporter = true
+                    } label: {
+                        Label("导入课表", systemImage: "square.and.arrow.down")
+                    }
+                    Button {
+                        showMembers = true
+                    } label: {
+                        Label("成员管理", systemImage: "person.2")
+                    }
                 }
                 Button {
-                    exportCsv()
+                    showTimeSearch = true
                 } label: {
-                    Label("导出该成员课表（CSV）", systemImage: "square.and.arrow.up")
+                    Label("时间查找", systemImage: "clock")
+                }
+                Button {
+                    exportXlsx()
+                } label: {
+                    Label("导出该成员课表（xlsx）", systemImage: "square.and.arrow.up")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -183,13 +244,28 @@ struct TimetableView: View {
         return seen
     }
 
-    private func exportCsv() {
+    private func exportXlsx() {
         guard let p = person else { return }
-        let (name, lines) = Exporter.timetableCsv(p)
-        if let url = Exporter.writeCsv(name, lines) {
+        let sheets = Exporter.timetableSheets([p])
+        if let url = Exporter.write(Exporter.timetableFileName([p]), sheets) {
             shareItem = ShareItem(url: url)
         } else {
             app.showToast("导出失败")
+        }
+    }
+
+    /// 用导入的课程替换当前成员课表（保存失败回滚）
+    private func applyImport() {
+        guard let p = person, !pendingCourses.isEmpty else { return }
+        let old = p.courses
+        let n = pendingCourses.count
+        p.courses = pendingCourses
+        pendingCourses = []
+        showImportConfirm = false
+        app.poke()
+        app.saveData("已导入 \(n) 条课程") {
+            p.courses = old
+            AppState.shared.poke()
         }
     }
 
@@ -235,11 +311,14 @@ struct TimetableView: View {
             }
         }
         let isToday = (day == M.todayDay && week == M.currentWeek)
+        let isPicked = (day == pickedDay)
         return VStack(spacing: gap) {
             Text(M.days[day - 1])
-                .font(.system(size: 11, weight: isToday ? .bold : .regular))
-                .foregroundColor(isToday ? .blue : .secondary)
+                .font(.system(size: 11, weight: (isToday || isPicked) ? .bold : .regular))
+                .foregroundColor(isPicked ? .white : (isToday ? .blue : .secondary))
                 .frame(width: colW, height: 18)
+                .background(isPicked ? Color.blue : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
             ZStack(alignment: .topLeading) {
                 // 空白格：管理员点击直接新增课程
                 VStack(spacing: gap) {
@@ -409,5 +488,95 @@ struct CourseDetailSheet: View {
             p.courses.insert(origin, at: min(at, p.courses.count))
             AppState.shared.poke()
         }
+    }
+}
+
+/* ================= 跳转到：显示周次 / 按日期定位 =================
+   对标安卓 TimetablePage.pickWeekOrDate（🗓 显示周次 · 📅 选择具体日期），
+   iOS 上合成一页，日期跳转后高亮所在当天。
+   ============================================================= */
+
+struct JumpSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var week: Int
+    @Binding var pickedDay: Int
+    @State private var date = Date()
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                VStack(spacing: 10) {
+                    HStack {
+                        Text("按日期定位").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        DatePicker("", selection: $date, displayedComponents: .date)
+                            .labelsHidden()
+                            .environment(\.locale, Locale(identifier: "zh_CN"))
+                    }
+                    Button {
+                        jumpToDate()
+                    } label: {
+                        Text("跳到这一天")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                    }
+                    .liquidGlass(cornerRadius: 12)
+                    .buttonStyle(.plain)
+
+                    Text("不在本学期第 1—\(M.TOTAL_WEEKS) 周范围内的日期无法跳转。")
+                        .font(.caption2).foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(16)
+
+                Divider()
+
+                List {
+                    ForEach(1...M.TOTAL_WEEKS, id: \.self) { w in
+                        Button {
+                            week = w
+                            pickedDay = 0
+                            dismiss()
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("第 \(w) 周" + (w == M.currentWeek ? "（本周）" : ""))
+                                        .font(.subheadline)
+                                    Text("\(M.weekDate(w, 1)) ~ \(M.weekDate(w, 7))")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if w == week {
+                                    Image(systemName: "checkmark").foregroundColor(.blue)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .listStyle(.plain)
+            }
+            .navigationTitle("跳转到")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func jumpToDate() {
+        let iso = M.dateToIso(date)
+        guard let sd = M.semesterOf(iso) else {
+            AppState.shared.showToast("\(M.formatCn(iso)) 不在本学期第 1—\(M.TOTAL_WEEKS) 周范围内")
+            return
+        }
+        week = sd.week
+        pickedDay = sd.day
+        AppState.shared.showToast("已跳到第 \(sd.week) 周 · \(M.days[sd.day - 1])")
+        dismiss()
     }
 }

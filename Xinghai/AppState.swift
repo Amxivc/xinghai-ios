@@ -22,21 +22,40 @@ final class AppState: ObservableObject {
 
     private let d = UserDefaults.standard
 
+    /// 「保持登录状态（下次打开免登录）」——不勾时凭证只活在本次会话内存里
+    @Published var remember = true
+    private var memTok: [String: String] = [:]
+
+    private func tok(_ key: String) -> String {
+        if let v = memTok[key] { return v }
+        if remember, let v = d.string(forKey: key) { return v }
+        return ""
+    }
+
+    private func setTok(_ key: String, _ v: String) {
+        memTok[key] = v
+        if remember { d.set(v, forKey: key) } else { d.removeObject(forKey: key) }
+    }
+
+    private func setMeta(_ key: String, _ v: Any?) {
+        if remember, let v = v { d.set(v, forKey: key) } else { d.removeObject(forKey: key) }
+    }
+
     var cbToken: String {
-        get { d.string(forKey: "cb_token") ?? "" }
-        set { d.set(newValue.isEmpty ? nil : newValue, forKey: "cb_token") }
+        get { tok("cb_token") }
+        set { setTok("cb_token", newValue) }
     }
     var cbRefresh: String {
-        get { d.string(forKey: "cb_refresh") ?? "" }
-        set { d.set(newValue.isEmpty ? nil : newValue, forKey: "cb_refresh") }
+        get { tok("cb_refresh") }
+        set { setTok("cb_refresh", newValue) }
     }
     var sbToken: String {
-        get { d.string(forKey: "sb_token") ?? "" }
-        set { d.set(newValue.isEmpty ? nil : newValue, forKey: "sb_token") }
+        get { tok("sb_token") }
+        set { setTok("sb_token", newValue) }
     }
     var sbRefresh: String {
-        get { d.string(forKey: "sb_refresh") ?? "" }
-        set { d.set(newValue.isEmpty ? nil : newValue, forKey: "sb_refresh") }
+        get { tok("sb_refresh") }
+        set { setTok("sb_refresh", newValue) }
     }
 
     var isLoggedIn: Bool { cbUser != nil || sbUser != nil }
@@ -62,13 +81,16 @@ final class AppState: ObservableObject {
     }
 
     private init() {
-        if let u = d.string(forKey: "cb_user") {
-            cbUser = u
-            cbAdmin = d.bool(forKey: "cb_admin")
-        }
-        if let u = d.string(forKey: "sb_user") {
-            sbUser = u
-            sbAdmin = d.bool(forKey: "sb_admin")
+        remember = d.object(forKey: "remember_login") as? Bool ?? true
+        if remember {
+            if let u = d.string(forKey: "cb_user") {
+                cbUser = u
+                cbAdmin = d.bool(forKey: "cb_admin")
+            }
+            if let u = d.string(forKey: "sb_user") {
+                sbUser = u
+                sbAdmin = d.bool(forKey: "sb_admin")
+            }
         }
         loadCache()
         // 启动后台静默刷新：缓存先上屏，云端数据回来后自动替换
@@ -206,7 +228,11 @@ final class AppState: ObservableObject {
     /* ================= 登录 / 退出 ================= */
 
     /// mode: 0=腾讯云 1=Supabase 2=双端（腾讯云侧自动用 @ 前缀作用户名）
-    func login(email: String, password: String, mode: Int, done: @escaping (String) -> Void) {
+    /// remember: 是否「保持登录状态」（勾上才把 token 落盘）
+    func login(email: String, password: String, mode: Int, remember: Bool = true,
+               done: @escaping (String) -> Void) {
+        self.remember = remember
+        d.set(remember, forKey: "remember_login")
         let user = String(email.split(separator: "@").first.map(String.init) ?? email)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -217,10 +243,10 @@ final class AppState: ObservableObject {
                     let a = try Cloud.cbSignIn(username: user, password: password)
                     // 与安卓端一致：管理员校验失败不阻断登录（否则网络抖动会被误报成登录失败）
                     let admin = (try? Cloud.cbIsAdmin(uid: a.uid, token: a.token)) ?? false
-                    self.d.set(a.token, forKey: "cb_token")
-                    self.d.set(a.refresh, forKey: "cb_refresh")
-                    self.d.set(user, forKey: "cb_user")
-                    self.d.set(admin, forKey: "cb_admin")
+                    self.cbToken = a.token
+                    self.cbRefresh = a.refresh
+                    self.setMeta("cb_user", user)
+                    self.setMeta("cb_admin", admin)
                     DispatchQueue.main.async {
                         self.cbUser = user
                         self.cbAdmin = admin
@@ -235,10 +261,10 @@ final class AppState: ObservableObject {
                 do {
                     let a = try Cloud.sbSignIn(email: email, password: password)
                     let admin = (try? Cloud.sbIsAdmin(uid: a.uid, token: a.token)) ?? false
-                    self.d.set(a.token, forKey: "sb_token")
-                    self.d.set(a.refresh, forKey: "sb_refresh")
-                    self.d.set(a.user, forKey: "sb_user")
-                    self.d.set(admin, forKey: "sb_admin")
+                    self.sbToken = a.token
+                    self.sbRefresh = a.refresh
+                    self.setMeta("sb_user", a.user)
+                    self.setMeta("sb_admin", admin)
                     DispatchQueue.main.async {
                         self.sbUser = a.user
                         self.sbAdmin = admin
@@ -255,6 +281,7 @@ final class AppState: ObservableObject {
     }
 
     func logout() {
+        memTok.removeAll()
         for k in ["cb_token", "cb_refresh", "cb_user", "cb_admin",
                   "sb_token", "sb_refresh", "sb_user", "sb_admin"] {
             d.removeObject(forKey: k)

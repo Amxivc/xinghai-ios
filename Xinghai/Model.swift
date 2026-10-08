@@ -53,6 +53,8 @@ final class WorkRow {
     var remark = ""
     var responsible = ""
     var status = ""
+    /// 批量选择时的临时勾选标记（不落盘，与安卓端 selected 一致）
+    var selected = false
 
     var hasContent: Bool {
         notBlank(name) || notBlank(activity) || notBlank(content) || notBlank(equipment)
@@ -349,6 +351,98 @@ enum M {
             if ka != kb { return ka < kb }
             return a.name < b.name
         }
+    }
+
+    /// 按成员列表的当前顺序切出班级分组名（未排序前请先 sortPersons）
+    static func classGroups(_ persons: [Person]) -> [String] {
+        var out: [String] = []
+        for p in persons where out.last != p.cls { out.append(p.cls) }
+        return out
+    }
+
+    /// 每个班级在 persons 里的起止下标 [start, end)，与 classGroups 一一对应
+    static func classRanges(_ persons: [Person]) -> [(Int, Int)] {
+        var out: [(Int, Int)] = []
+        var i = 0
+        while i < persons.count {
+            var j = i
+            while j < persons.count && persons[j].cls == persons[i].cls { j += 1 }
+            out.append((i, j))
+            i = j
+        }
+        return out
+    }
+
+    /* ================= 时间换算（时间查找） ================= */
+
+    /// yyyy-MM-dd → (第几周, 周几)；不在本学期第 1—21 周内返回 nil
+    static func semesterOf(_ iso: String?) -> (week: Int, day: Int)? {
+        guard let ymd = parseYmd(iso) else { return nil }
+        let cal = Calendar.current
+        guard let date = cal.date(from: DateComponents(year: ymd.0, month: ymd.1, day: ymd.2)) else {
+            return nil
+        }
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: start),
+                                      to: cal.startOfDay(for: date)).day ?? -1
+        if days < 0 || days >= TOTAL_WEEKS * 7 { return nil }
+        return (days / 7 + 1, days % 7 + 1)
+    }
+
+    /// 分钟数 → "1小时20分钟"
+    static func durationText(_ mins: Int) -> String {
+        if mins < 60 { return "\(mins)分钟" }
+        let h = mins / 60, m = mins % 60
+        return m > 0 ? "\(h)小时\(m)分钟" : "\(h)小时"
+    }
+
+    /// 课程在某天的起止分钟（自定义时间优先）
+    static func courseMinutes(_ c: Course) -> (Int, Int) {
+        if c.timeMode == "custom" && !c.customStart.isEmpty && !c.customEnd.isEmpty {
+            return (clockMinutes(c.customStart), clockMinutes(c.customEnd))
+        }
+        if c.s < 1 || c.s > periods.count || c.e < 1 || c.e > periods.count { return (-1, -1) }
+        let a = clockMinutes(periods[c.s - 1][1].components(separatedBy: "-")[0])
+        let b = clockMinutes(periods[c.e - 1][1].components(separatedBy: "-")[1])
+        return (a, b)
+    }
+
+    static func hhmm(_ mins: Int) -> String { pad2(mins / 60) + ":" + pad2(mins % 60) }
+
+    /// Date → "HH:mm"
+    static func hmString(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+    }
+
+    /// 今天周几（1=周一 … 7=周日）
+    static func todayDay() -> Int {
+        let wd = Calendar.current.component(.weekday, from: Date())
+        return wd == 1 ? 7 : wd - 1
+    }
+
+    /* ================= 导出工具 ================= */
+
+    /// 可导出的记录数（只算「有内容」的）
+    static func exportableCount(_ year: Int, _ month: Int, works: [WorkRow]) -> Int {
+        worksOfMonth(year, month, works: works).filter { $0.hasContent }.count
+    }
+
+    /// 出现过的年份（降序），至少包含当前年份前后 5 年
+    static func workYears(_ curYear: Int, works: [WorkRow]) -> [Int] {
+        var set = Set<Int>()
+        for y in (curYear - 5)...(curYear + 5) { set.insert(y) }
+        for r in works where regexMatch("^\\d{4}-\\d{2}-\\d{2}$", r.date) != nil {
+            if let y = Int(r.date.prefix(4)) { set.insert(y) }
+        }
+        return set.sorted(by: >)
+    }
+
+    /// 各种日期写法 → yyyy-MM-dd（认不出就原样返回），空值返回 ""
+    static func dateOnly(_ s: String?) -> String {
+        guard let raw = s?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return "" }
+        let t = raw.count > 10 ? String(raw.prefix(10)) : raw
+        guard let ymd = parseYmd(t) else { return t }
+        return String(format: "%04d-%02d-%02d", ymd.0, ymd.1, ymd.2)
     }
 
     /* ================= 台历 ================= */

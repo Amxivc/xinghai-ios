@@ -100,7 +100,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.3.1（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.4（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }
@@ -127,6 +127,7 @@ struct LoginSheet: View {
     @State private var email = ""
     @State private var password = ""
     @State private var busy = false
+    @State private var remember = AppState.shared.remember
     @State private var msg: String? = nil
 
     var body: some View {
@@ -141,11 +142,15 @@ struct LoginSheet: View {
                 .listRowBackground(Color.clear)
 
                 Section {
-                    TextField("邮箱（如 3435235927@qq.com）", text: $email)
+                    TextField("邮箱（如 xxxxx@xx.com）", text: $email)
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                     SecureField("密码", text: $password)
+                    Toggle("保持登录状态（下次打开免登录）", isOn: $remember)
+                        .font(.subheadline)
+                } footer: {
+                    Text("腾讯云会自动取邮箱 @ 前面的部分作登录名。")
                 }
 
                 if let m = msg {
@@ -188,7 +193,7 @@ struct LoginSheet: View {
     private func doLogin() {
         busy = true
         msg = nil
-        app.login(email: email, password: password, mode: mode) { result in
+        app.login(email: email, password: password, mode: mode, remember: remember) { result in
             busy = false
             msg = result
             if app.isLoggedIn {

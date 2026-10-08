@@ -145,8 +145,9 @@ final class AppState: ObservableObject {
             }
         }
         loadCache()
-        // 启动后台静默刷新：缓存先上屏，云端数据回来后自动替换
-        load()
+        // 顺序不能反：先把登录态续上（access_token 只有 2 小时），再去读云端。
+        // 续期结束会回调 load()，缓存已经先上屏了，所以用户看不到空档。
+        renewSession { [weak self] in self?.load() }
     }
 
     /* ================= 轻提示 ================= */
@@ -238,6 +239,91 @@ final class AppState: ObservableObject {
                     self.showToast(msg)
                 }
             }
+        }
+    }
+
+    /* ================= 登录态续期 ================= */
+
+    /// 启动时先续期、再拉数据。
+    ///
+    /// 为什么要这一步：腾讯云 access_token 只有 2 小时，refresh_token 有 30 天。
+    /// 之前 iOS 端【完全没有刷新逻辑】，两小时一过 access_token 就静默失效 ——
+    /// 界面还理直气壮显示「已登录（管理员）」，可写入腾讯云一律 401，
+    /// 改动只落到 Supabase；而读取是「两台都读、取最新的那份」，
+    /// 于是用户看到的就是「改了课表像是没改」。
+    ///
+    /// 现在每次启动（以及登录后）都换一次：换成功就把新 token 存回去；
+    /// 换不动（refresh_token 也过期了）就老实把该端登出并提示，绝不假装还登录着。
+    /// 结束时一定回调 `done`，由它去拉数据 —— 这样「续期 → 读取」的顺序是有保证的。
+    func renewSession(done: (() -> Void)? = nil) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            var expired: [String] = []
+            var renewed = false
+
+            if self.cbUser != nil {
+                let rf = self.cbRefresh
+                if rf.isEmpty {
+                    self.forget("cb", "腾讯云")
+                    expired.append("腾讯云")
+                } else {
+                    do {
+                        let a = try Cloud.cbRefresh(rf)
+                        self.cbToken = a.token
+                        if !a.refresh.isEmpty { self.cbRefresh = a.refresh }
+                        let admin = (try? Cloud.cbIsAdmin(uid: a.uid, token: a.token)) ?? false
+                        self.setMeta("cb_admin", admin)
+                        DispatchQueue.main.async { self.cbAdmin = admin }
+                        renewed = true
+                    } catch {
+                        self.forget("cb", "腾讯云")
+                        expired.append("腾讯云")
+                    }
+                }
+            }
+
+            if self.sbUser != nil {
+                let rf = self.sbRefresh
+                if rf.isEmpty {
+                    self.forget("sb", "Supabase")
+                    expired.append("Supabase")
+                } else {
+                    do {
+                        let a = try Cloud.sbRefresh(rf)
+                        self.sbToken = a.token
+                        if !a.refresh.isEmpty { self.sbRefresh = a.refresh }
+                        let admin = (try? Cloud.sbIsAdmin(uid: a.uid, token: a.token)) ?? false
+                        self.setMeta("sb_admin", admin)
+                        DispatchQueue.main.async { self.sbAdmin = admin }
+                        renewed = true
+                    } catch {
+                        self.forget("sb", "Supabase")
+                        expired.append("Supabase")
+                    }
+                }
+            }
+
+            if !expired.isEmpty {
+                DispatchQueue.main.async {
+                    self.showToast("⚠ " + expired.joined(separator: " / ")
+                        + "登录已过期，请重新登录；否则改动只会写进另一台")
+                }
+            }
+            if renewed { DispatchQueue.main.async { self.poke() } }
+            DispatchQueue.main.async { done?() }
+        }
+    }
+
+    /// 某一端彻底失效：清掉它的凭证，让界面老实显示「未登录」
+    private func forget(_ who: String, _ label: String) {
+        if who == "cb" {
+            cbToken = ""; cbRefresh = ""
+            setMeta("cb_user", nil); setMeta("cb_admin", nil)
+            DispatchQueue.main.async { self.cbUser = nil; self.cbAdmin = false }
+        } else {
+            sbToken = ""; sbRefresh = ""
+            setMeta("sb_user", nil); setMeta("sb_admin", nil)
+            DispatchQueue.main.async { self.sbUser = nil; self.sbAdmin = false }
         }
     }
 

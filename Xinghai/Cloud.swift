@@ -270,6 +270,60 @@ enum Cloud {
         return a
     }
 
+    /// 用 refresh_token 换新的 access_token（腾讯云）。
+    ///
+    /// ⚠ 两个坑（与安卓端 `Cloud.cbRefresh` 保持一致，别再改回去）：
+    ///   ① `grant_type` 必须放在【请求体】里；放 URL query 会 400
+    ///      "grant type must be one of [authorization_code, refresh_token, ...]"。
+    ///   ② 【不能带 Authorization 头】：带 apikey(anon key) → 401 "token hash not match"；
+    ///      带已过期的 access_token → 400 failed_precondition "token expiry at ..."。
+    ///      只带 apikey + x-ty-id 才是 200（2026-10-08 实测）。
+    ///
+    /// 之前 iOS 端【完全没有刷新逻辑】：access_token 两小时一过就静默失效，
+    /// 界面还显示「已登录」，但写入腾讯云一律 401，改动只落到 Supabase；
+    /// 而读取又是「两台都读、取最新的那份」，于是表现成「改了课表像没改」。
+    static func cbRefresh(_ refreshToken: String) throws -> Auth {
+        guard !refreshToken.isEmpty else { throw CloudError.badResponse }
+        var h = cbHeaders(nil)
+        h.removeValue(forKey: "Authorization")          // 关键：刷新时不能带
+        let out = try Net.post(cbBase + "/auth/v1/token", h,
+                               jsonBody(["grant_type": "refresh_token",
+                                         "refresh_token": refreshToken]))
+        guard let d = out.data(using: .utf8),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else {
+            throw CloudError.badResponse
+        }
+        var a = Auth()
+        a.token = j["access_token"] as? String ?? ""
+        if a.token.isEmpty { throw CloudError.badResponse }
+        // refresh_token 用一次就轮换，必须把新的存回去，否则下次刷新必失败
+        a.refresh = j["refresh_token"] as? String ?? refreshToken
+        a.uid = j["sub"] as? String ?? ""
+        if a.uid.isEmpty { a.uid = uidFromJwt(a.token) }
+        return a
+    }
+
+    /// 用 refresh_token 换新的 access_token（Supabase）。
+    /// 走的是 GoTrue 标准形态：grant_type 放 URL query、Authorization 用 anon key —— 这条实测正常。
+    /// （腾讯云那条恰好相反，见 cbRefresh 的注释，两者不要互相「统一」。）
+    static func sbRefresh(_ refreshToken: String) throws -> Auth {
+        guard !refreshToken.isEmpty else { throw CloudError.badResponse }
+        let out = try Net.post(sbUrl + "/auth/v1/token?grant_type=refresh_token", sbHeaders(nil),
+                               jsonBody(["refresh_token": refreshToken]))
+        guard let d = out.data(using: .utf8),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else {
+            throw CloudError.badResponse
+        }
+        var a = Auth()
+        a.token = j["access_token"] as? String ?? ""
+        if a.token.isEmpty { throw CloudError.badResponse }
+        a.refresh = j["refresh_token"] as? String ?? refreshToken
+        if let u = j["user"] as? [String: Any] {
+            a.uid = u["id"] as? String ?? ""
+        }
+        return a
+    }
+
     static func sbSignIn(email: String, password: String) throws -> Auth {
         let out = try Net.post(sbUrl + "/auth/v1/token?grant_type=password", sbHeaders(nil),
                                jsonBody(["email": email, "password": password]))

@@ -311,6 +311,94 @@ enum M {
         c.ws = parseWeeks(c.w)
     }
 
+    /* ================= 同一节课被存成多条记录 → 合并 =================
+       导入课表或反复编辑后，同一节课常常留下多条记录：同一天、同课程名、同教室、
+       同教师，只是「周次」或「节次」范围写得不一样。这些记录各算一门的话，课表会把
+       它并排画成左右两块（看起来就是「一节课变成两节」），导出也会多出重复行。
+
+       判定为同一节课（三条同时满足）：
+         ① 星期 / 课程名 / 教室 / 教师 一致（去空格、统一全半角括号）
+         ② 周次集合相交 —— 存在某一周两条都会出现
+         ③ 节次区间相交 —— 排除「5-6 节 + 7-8 节」这种连排的另外一节课
+       合并结果：节次取并集、周次取并集，保留起点更早的那条。
+
+       ⚠ 判周次这一步不能省：「周2-6」+「周8-18」是同一门课的前后两段（第 7 周军训
+         空档），合并成「2-18」会把第 7 周也算成有课。规则与网页版、安卓版一致。 */
+
+    private static func normKey(_ s: String) -> String {
+        s.replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\u{3000}", with: "")
+            .replacingOccurrences(of: "（", with: "(")
+            .replacingOccurrences(of: "）", with: ")")
+    }
+
+    private static func sameCourseKey(_ c: Course) -> String {
+        "\(c.d)\u{1}\(normKey(c.n))\u{1}\(normKey(c.r))\u{1}\(normKey(c.t))"
+    }
+
+    /// 课程某端的时刻：自定义时间优先，其次取该节次的起/止时刻
+    static func courseClock(_ c: Course, start: Bool) -> String {
+        if c.timeMode == "custom" {
+            let v = start ? c.customStart : c.customEnd
+            if !v.isEmpty { return v }
+        }
+        let i = start ? c.s : c.e
+        guard (1...periods.count).contains(i) else { return "" }
+        let se = periods[i - 1][1].components(separatedBy: "-")
+        if start { return se.first ?? "" }
+        return se.count > 1 ? se[1] : ""
+    }
+
+    static func mergeSameCourses(_ p: Person) {
+        guard p.courses.count > 1 else { return }
+        var bucket: [String: [Int]] = [:]
+        for (i, c) in p.courses.enumerated() {
+            bucket[sameCourseKey(c), default: []].append(i)
+        }
+        var dead = Set<Int>()
+        for (_, idx) in bucket where idx.count > 1 {
+            var again = true
+            while again {
+                again = false
+                outer: for x in 0..<idx.count {
+                    if dead.contains(idx[x]) { continue }
+                    for y in (x + 1)..<idx.count {
+                        if dead.contains(idx[y]) { continue }
+                        let a = p.courses[idx[x]], b = p.courses[idx[y]]
+                        if a.ws.isDisjoint(with: b.ws) { continue }   // 周次不相交 → 前后两段
+                        if a.e < b.s || b.e < a.s { continue }        // 节次不相交 → 连排的另一节
+                        let base  = (a.s, -a.e) <= (b.s, -b.e) ? a : b
+                        let other = base === a ? b : a
+                        if base.timeMode == "custom" {
+                            // 自定义时间以起止时刻为准：把并集写回自定义时间，
+                            // 否则 normalize 会按旧时刻把 s/e 又缩回去。
+                            let os = courseClock(other, start: true)
+                            let oe = courseClock(other, start: false)
+                            let bs = courseClock(base, start: true)
+                            let be = courseClock(base, start: false)
+                            let om1 = clockMinutes(os), om2 = clockMinutes(oe)
+                            if om1 >= 0, om1 < clockMinutes(bs) { base.customStart = os }
+                            if om2 >= 0, om2 > clockMinutes(be) { base.customEnd = oe }
+                        }
+                        base.s = min(a.s, b.s)
+                        base.e = max(a.e, b.e)
+                        base.ws.formUnion(other.ws)
+                        base.w = compressWeeks(base.ws)
+                        normalize(base)
+                        dead.insert(idx[y])
+                        again = true
+                        break outer
+                    }
+                }
+            }
+        }
+        if !dead.isEmpty {
+            p.courses = p.courses.enumerated()
+                .filter { !dead.contains($0.offset) }
+                .map { $0.element }
+        }
+    }
+
     /// 小节范围对应的真实时间，如 09:00-10:25
     static func timeRange(_ s: Int, _ e: Int) -> String {
         guard (1...periods.count).contains(s), (1...periods.count).contains(e) else { return "" }
@@ -526,6 +614,9 @@ enum M {
                     p.courses.append(c)
                 }
             }
+            // 同一节课被存成多条记录时合并成一条（否则课表会把它并排画成两节）。
+            // 必须在 normalize 之后：合并要靠周次集合判断「是不是同一周的同一节课」。
+            mergeSameCourses(p)
             people.append(p)
         }
         guard !people.isEmpty else { return nil }

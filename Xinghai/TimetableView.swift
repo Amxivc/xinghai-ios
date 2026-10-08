@@ -267,8 +267,11 @@ struct TimetableView: View {
     private func applyImport() {
         guard let p = person, !pendingCourses.isEmpty else { return }
         let old = p.courses
-        let n = pendingCourses.count
         p.courses = pendingCourses
+        // 源表里同一节课常被拆成好几行（周次/节次写法不同），导入后立即合并，
+        // 免得课表把它并排画成两节。
+        M.mergeSameCourses(p)
+        let n = p.courses.count
         pendingCourses = []
         showImportConfirm = false
         app.poke()

@@ -19,8 +19,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.xinghai.musicpub
         PRODUCT_NAME: Xinghai
-        MARKETING_VERSION: "0.4.4"
-        CURRENT_PROJECT_VERSION: "9"
+        MARKETING_VERSION: "0.4.5"
+        CURRENT_PROJECT_VERSION: "10"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_KEY_CFBundleDisplayName: 星海音教宣传部

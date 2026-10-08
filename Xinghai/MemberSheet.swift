@@ -224,7 +224,10 @@ struct MemberSheet: View {
         guard let target = importTarget, !pendingCourses.isEmpty else { return }
         let old = target.courses
         target.courses = pendingCourses
-        let n = pendingCourses.count
+        // 源表里同一节课常被拆成好几行（周次/节次写法不同），导入后立即合并，
+        // 免得课表把它并排画成两节。
+        M.mergeSameCourses(target)
+        let n = target.courses.count
         pendingCourses = []
         showImportConfirm = false
         importTarget = nil

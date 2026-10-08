@@ -385,7 +385,11 @@ enum M {
                         base.ws.formUnion(other.ws)
                         base.w = compressWeeks(base.ws)
                         normalize(base)
-                        dead.insert(idx[y])
+                        // ⚠ 被删的必须是 base 之外的那条，不能图省事写死 idx[y]：
+                        // 起点更早的那条可能是 b（如「10-11 周5-18」在前、「9-10 周8-18」在后），
+                        // 这时 base=b、other=a，写死 y 会把刚并好的记录删掉，并集白算。
+                        let deadIdx = base === a ? idx[y] : idx[x]
+                        dead.insert(deadIdx)
                         again = true
                         break outer
                     }

@@ -1,6 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// 课表某一天里的一门课，外加它在「重叠簇」里被分到的道次。
+/// 撞课（同节次起，或前后压着）时，同一簇的课并排显示，不再互相盖住。
+private struct DayCourse: Identifiable {
+    let id: Int        // 在 person.courses 里的下标，用于点开课程详情
+    let course: Course
+    let lane: Int      // 第几道（从 0 起）
+    let lanes: Int     // 这一簇共几道
+}
+
 struct TimetableView: View {
     @ObservedObject private var app = AppState.shared
     @State private var week = M.currentWeek
@@ -310,6 +319,32 @@ struct TimetableView: View {
                 list.append((i, c))
             }
         }
+
+        /* 同一天可能有两门以上课撞在同一时段。以前是每门都铺满整列、只按起始节次位移，
+           后画的把先画的整个盖住 —— 所以撞课时只看得到一节。
+           现在按「重叠簇」分道：簇里有几门就把列宽平分成几道，
+           与安卓端 CourseGridView.drawDayColumn 的算法一致。 */
+        list.sort { a, b in
+            if a.1.s != b.1.s { return a.1.s < b.1.s }
+            return a.1.e > b.1.e
+        }
+        var placed: [DayCourse] = []
+        var cursor = 0
+        while cursor < list.count {
+            var end = cursor
+            var maxEnd = list[cursor].1.e
+            while end + 1 < list.count && list[end + 1].1.s <= maxEnd {
+                end += 1
+                maxEnd = max(maxEnd, list[end].1.e)
+            }
+            let lanes = end - cursor + 1
+            for k in cursor...end {
+                placed.append(DayCourse(id: list[k].0, course: list[k].1,
+                                        lane: k - cursor, lanes: lanes))
+            }
+            cursor = end + 1
+        }
+
         let isToday = (day == M.todayDay && week == M.currentWeek)
         let isPicked = (day == pickedDay)
         return VStack(spacing: gap) {
@@ -330,14 +365,17 @@ struct TimetableView: View {
                             .onTapGesture { tapEmpty(day: day, section: p) }
                     }
                 }
-                ForEach(list, id: \.0) { pair in
-                    courseBlock(pair.1)
-                        .frame(width: colW,
-                               height: rowH * CGFloat(pair.1.span) + gap * CGFloat(pair.1.span - 1),
+                ForEach(placed) { item in
+                    let laneGap: CGFloat = item.lanes > 1 ? 2 : 0
+                    let laneW = (colW - laneGap * CGFloat(item.lanes - 1)) / CGFloat(item.lanes)
+                    courseBlock(item.course, narrow: item.lanes > 1)
+                        .frame(width: laneW,
+                               height: rowH * CGFloat(item.course.span) + gap * CGFloat(item.course.span - 1),
                                alignment: .topLeading)
-                        .offset(y: stride * CGFloat(pair.1.s - 1))
+                        .offset(x: (laneW + laneGap) * CGFloat(item.lane),
+                                y: stride * CGFloat(item.course.s - 1))
                         .contentShape(Rectangle())
-                        .onTapGesture { tapCourse(pair.0) }
+                        .onTapGesture { tapCourse(item.id) }
                 }
             }
         }
@@ -357,20 +395,21 @@ struct TimetableView: View {
         activeSheet = .detail(personIdx: idx, courseIdx: courseIdx)
     }
 
-    private func courseBlock(_ c: Course) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+    /// narrow = 撞课并排时的窄条：字号更小、不显示教师，给课程名与教室留位置
+    private func courseBlock(_ c: Course, narrow: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: narrow ? 1 : 2) {
             Text(c.n)
-                .font(.system(size: 9.5, weight: .medium))
+                .font(.system(size: narrow ? 8.5 : 9.5, weight: .medium))
                 .lineLimit(3)
-                .minimumScaleFactor(0.55)
+                .minimumScaleFactor(0.5)
             if !c.r.isEmpty {
                 Text(c.r)
-                    .font(.system(size: 8))
+                    .font(.system(size: narrow ? 7.5 : 8))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .foregroundColor(.secondary)
             }
-            if !c.t.isEmpty {
+            if !narrow && !c.t.isEmpty {
                 Text(c.t)
                     .font(.system(size: 8))
                     .lineLimit(1)
@@ -379,7 +418,7 @@ struct TimetableView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(3)
+        .padding(narrow ? 2 : 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 5).fill(c.color.opacity(0.16)))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(c.color.opacity(0.55), lineWidth: 0.8))

@@ -241,7 +241,10 @@ final class AppState: ObservableObject {
                 pick = cbSnap ?? sbSnap
             }
 
-            // 两台内容不一致 → 把最新那份补写到落后的那台（前提是那台登录着）
+            // 两台内容不一致 → 把最新那份补写到落后的那台（前提是那台登录着）。
+            // 补写沿用「胜出方」原来的时间戳，而不是当前时间：这样两台写完时间戳就相等，
+            // 不会再反复触发补写；万一期间别的设备又写入了更新的版本，也不会被这份补写
+            // 盖上（它时间戳更旧，下次读取仍会选中更新的那份）。
             var heal: String? = nil
             var healTarget = ""
             var healedAt: Date? = nil
@@ -250,7 +253,7 @@ final class AppState: ObservableObject {
                 let tok = (target == "cb") ? cbTok : sbTok
                 if !tok.isEmpty {
                     healTarget = target
-                    let iso = Cloud.nowIsoText()
+                    let iso = Cloud.iso(from: p.at)
                     do {
                         if target == "cb" { try Cloud.cbWrite(p.data, token: tok, iso: iso) }
                         else { try Cloud.sbWrite(p.data, token: tok, iso: iso) }

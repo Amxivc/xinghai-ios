@@ -139,6 +139,16 @@ enum Cloud {
     /// 对外暴露：写两台时共用同一个时间戳，两台才能比对出「谁更新」
     static func nowIsoText() -> String { nowIso() }
 
+    /// Date → 与 nowIso() 同格式的 UTC 字符串（补写旧数据时沿用原来的时间戳）
+    static func iso(from d: Date?) -> String {
+        guard let d = d else { return nowIso() }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: d)
+    }
+
     /// 解析 PostgREST 的时间戳，形如 2026-10-08T05:03:42.221+00:00 / ...+08:00 / ...Z
     /// 用 ISO8601DateFormatter 会挑格式，这里两种分别试，都失败则返回 nil（按最旧算）。
     static func parseIso(_ s: String?) -> Date? {

@@ -78,6 +78,34 @@ struct MineView: View {
             InfoRow(label: "成员数", value: app.persons.isEmpty ? "—" : "\(app.persons.count) 人")
             InfoRow(label: "课程总数", value: app.persons.isEmpty ? "—" : "\(app.totalCourses) 门")
             InfoRow(label: "更新时间", value: app.dataUpdatedAt.isEmpty ? "—" : app.dataUpdatedAt)
+
+            /* 两台服务器各自的状态：只同步上一台这件事，得让用户看得见 */
+            HStack {
+                Text("腾讯云").font(.subheadline)
+                Spacer()
+                Text(serverState(cb: true))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Supabase").font(.subheadline)
+                Spacer()
+                Text(serverState(cb: false))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            if !app.cloudNote.trimmingCharacters(in: .whitespaces).isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                    Text(app.cloudNote)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
             Button {
                 app.load()
             } label: {
@@ -95,12 +123,24 @@ struct MineView: View {
         }
     }
 
+    /// 单台服务器的同步状态：未登录 / 取不到 / 最新 / 落后（带时间）
+    private func serverState(cb: Bool) -> String {
+        let logged = cb ? app.isCbLogged : app.isSbLogged
+        let got = cb ? app.cbGot : app.sbGot
+        let at = cb ? app.cbAt : app.sbAt
+        if !logged { return "未登录" }
+        if !got { return "取不到" }
+        guard let at = at else { return "已连接" }
+        let newest = max(app.cbAt ?? .distantPast, app.sbAt ?? .distantPast)
+        return (at >= newest ? "最新" : "落后") + "（" + app.clockText(at) + "）"
+    }
+
     /* ================= 关于卡 ================= */
 
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.4.1（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.4.2（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

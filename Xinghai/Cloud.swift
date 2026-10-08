@@ -108,6 +108,15 @@ enum Cloud {
         var refresh = ""
     }
 
+    /// 一次读取的结果：数据 + 这份数据是什么时候写的 + 来自哪台服务器。
+    /// 「什么时候写的」是判断两台谁更新的唯一依据——以前只看「谁先答应用谁」，
+    /// 结果只往 Supabase 写、却优先读腾讯云，本机改完一重进就「恢复原样」。
+    struct Snap {
+        var data: [String: Any]
+        var at: Date?          // updated_at；解析不出来按「最旧」算
+        var src: String        // "cb" / "sb"
+    }
+
     private static func cbHeaders(_ token: String?) -> [String: String] {
         ["apikey": cbKey,
          "Authorization": "Bearer " + (token ?? cbKey),
@@ -127,11 +136,30 @@ enum Cloud {
         return f.string(from: Date())
     }
 
+    /// 对外暴露：写两台时共用同一个时间戳，两台才能比对出「谁更新」
+    static func nowIsoText() -> String { nowIso() }
+
+    /// 解析 PostgREST 的时间戳，形如 2026-10-08T05:03:42.221+00:00 / ...+08:00 / ...Z
+    /// 用 ISO8601DateFormatter 会挑格式，这里两种分别试，都失败则返回 nil（按最旧算）。
+    static func parseIso(_ s: String?) -> Date? {
+        guard let s = s, !s.isEmpty else { return nil }
+        let withFrac = ISO8601DateFormatter()
+        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFrac.date(from: s) { return d }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: s)
+    }
+
     /// PostgREST 返回 [{...}]，取出第一行的 data 字段
-    private static func pickData(_ body: String) -> [String: Any]? {
+    private static func rowOf(_ body: String) -> [String: Any]? {
         guard let d = body.data(using: .utf8),
               let arr = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]],
               let row = arr.first else { return nil }
+        return row
+    }
+
+    private static func dataOf(_ row: [String: Any]) -> [String: Any]? {
         if let o = row["data"] as? [String: Any] { return o }
         if let s = row["data"] as? String,
            let sd = s.data(using: .utf8),
@@ -139,6 +167,17 @@ enum Cloud {
             return o
         }
         return nil
+    }
+
+    private static func pickData(_ body: String) -> [String: Any]? {
+        guard let row = rowOf(body) else { return nil }
+        return dataOf(row)
+    }
+
+    /// 连 data 带 updated_at 一起取
+    private static func pickSnap(_ body: String, _ src: String) -> Snap? {
+        guard let row = rowOf(body), let data = dataOf(row) else { return nil }
+        return Snap(data: data, at: parseIso(row["updated_at"] as? String), src: src)
     }
 
     /* ================= 读取 ================= */
@@ -153,20 +192,40 @@ enum Cloud {
                              sbHeaders(nil)))
     }
 
+    /// 带时间戳的读取：两台都读，比出谁最新
+    static func cbReadSnap() throws -> Snap? {
+        try pickSnap(Net.get(cbBase + "/v1/rdb/rest/timetable_state?select=data,updated_at&id=eq.1",
+                             cbHeaders(nil)), "cb")
+    }
+
+    static func sbReadSnap() throws -> Snap? {
+        try pickSnap(Net.get(sbUrl + "/rest/v1/timetable_state?select=data,updated_at&id=eq.1",
+                             sbHeaders(nil)), "sb")
+    }
+
     /* ================= 写入 ================= */
 
     static func cbWrite(_ data: [String: Any], token: String?) throws {
+        try cbWrite(data, token: token, iso: nowIso())
+    }
+
+    /// iso 由调用方统一生成：两台写同一份数据必须用同一个时间戳，否则「谁更新」会漂
+    static func cbWrite(_ data: [String: Any], token: String?, iso: String) throws {
         var h = cbHeaders(token)
         h["Prefer"] = "resolution=merge-duplicates,return=minimal"
         _ = try Net.post(cbBase + "/v1/rdb/rest/timetable_state", h,
-                         jsonBody(["id": 1, "data": data, "updated_at": nowIso()]))
+                         jsonBody(["id": 1, "data": data, "updated_at": iso]))
     }
 
     static func sbWrite(_ data: [String: Any], token: String?) throws {
+        try sbWrite(data, token: token, iso: nowIso())
+    }
+
+    static func sbWrite(_ data: [String: Any], token: String?, iso: String) throws {
         var h = sbHeaders(token)
         h["Prefer"] = "resolution=merge-duplicates,return=minimal"
         _ = try Net.post(sbUrl + "/rest/v1/timetable_state?on_conflict=id", h,
-                         jsonBody(["id": 1, "data": data, "updated_at": nowIso()]))
+                         jsonBody(["id": 1, "data": data, "updated_at": iso]))
     }
 
     /* ================= 登录 ================= */

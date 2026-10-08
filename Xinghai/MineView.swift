@@ -43,6 +43,14 @@ struct MineView: View {
                         }
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        /* 只登录一台时把风险说出来。方向由 AppState 判断：
+                           读数据不需要登录，未登录那台如果反而更新，危险是「改动会被覆盖」。 */
+                        if let w = app.halfLoginWarning {
+                            Text(w)
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     Spacer()
                 }
@@ -124,15 +132,18 @@ struct MineView: View {
     }
 
     /// 单台服务器的同步状态：未登录 / 取不到 / 最新 / 落后（带时间）
+    /// 单台服务器：数据新旧 + 能不能写（登录）分开说。
+    /// 读数据不需要登录，所以未登录的那台完全可能是较新的那份 —— 必须标出来。
     private func serverState(cb: Bool) -> String {
         let logged = cb ? app.isCbLogged : app.isSbLogged
         let got = cb ? app.cbGot : app.sbGot
         let at = cb ? app.cbAt : app.sbAt
-        if !logged { return "未登录" }
-        if !got { return "取不到" }
-        guard let at = at else { return "已连接" }
+        if !got { return logged ? "取不到" : "未登录，也取不到" }
+        guard let at = at else { return logged ? "已连接" : "未登录" }
         let newest = max(app.cbAt ?? .distantPast, app.sbAt ?? .distantPast)
-        return (at >= newest ? "最新" : "落后") + "（" + app.clockText(at) + "）"
+        var tag = at >= newest ? "最新" : "落后"
+        if !logged { tag = "未登录 · " + tag }
+        return tag + "（" + app.clockText(at) + "）"
     }
 
     /* ================= 关于卡 ================= */

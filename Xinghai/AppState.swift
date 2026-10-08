@@ -91,13 +91,44 @@ final class AppState: ObservableObject {
         persons.reduce(0) { $0 + $1.courses.count }
     }
 
+    /// 数据来源：按两台的实际读取结果算，而不是「首选后端」。
+    /// v0.4.2 起读取是「两台都读、取最新的那份」，主 / 备之分已经不存在：
+    /// 旧写法在只登录一台时会显示「Supabase」，而数据其实来自腾讯云，纯属误导。
     var sourceLabel: String {
-        switch dataSource {
-        case "cb": return "腾讯云"
-        case "sb": return "Supabase"
-        case "cache": return "本地缓存"
-        default: return "内置数据"
+        if cbGot && sbGot {
+            if let a = cbAt, let b = sbAt, a != b {
+                return a > b ? "腾讯云（较新）" : "Supabase（较新）"
+            }
+            return "腾讯云 + Supabase（已一致）"
         }
+        if cbGot { return "腾讯云（只连上一台）" }
+        if sbGot { return "Supabase（只连上一台）" }
+        if !persons.isEmpty { return "本地缓存" }
+        return "内置数据"
+    }
+
+    /// 只登录一台时的风险提示。三种情况说法必须不同，否则会出现「两台已一致」
+    /// 却写「另一台是旧数据」这种自相矛盾：
+    ///   ① 未登录那台反而更新 → 危险是「你的改动会被它覆盖」（方向相反）
+    ///   ② 两台时间戳相同     → 数据没差，只是改动写不进未登录那台
+    ///   ③ 未登录那台确实旧   → 改动写不进它，它会一直是旧数据
+    var halfLoginWarning: String? {
+        let hasCb = !cbToken.isEmpty, hasSb = !sbToken.isEmpty
+        guard hasCb != hasSb else { return nil }
+        let selfName = hasCb ? "腾讯云" : "Supabase"
+        let otherName = hasCb ? "Supabase" : "腾讯云"
+        let body: String
+        if cbGot && sbGot, cbAt == sbAt {
+            body = "两台数据已一致，但你的改动只会写进" + selfName
+        } else {
+            let otherNewer = hasCb
+                ? (sbGot && (sbAt ?? .distantPast) > (cbAt ?? .distantPast))
+                : (cbGot && (cbAt ?? .distantPast) > (sbAt ?? .distantPast))
+            body = otherNewer
+                ? otherName + "上有更新的数据，你的改动会被它覆盖"
+                : "另一台（" + otherName + "）会一直是旧数据"
+        }
+        return "⚠ 只连上一台服务器：" + body + "，建议用「双端同时」重登"
     }
 
     private init() {
@@ -295,14 +326,9 @@ final class AppState: ObservableObject {
     /// 只登录一台是最常见也最危险的情况：本机改的东西只写进一台，
     /// 而网页版默认读腾讯云，所以必须显式提醒。
     private func buildNote(heal: String?) -> String {
-        let hasCb = !cbToken.isEmpty
-        let hasSb = !sbToken.isEmpty
-        if hasCb && !hasSb {
-            return "Supabase 未登录：只写入腾讯云，备用服务器是旧数据"
-        }
-        if !hasCb && hasSb {
-            return "腾讯云未登录：只写入 Supabase，网页版可能看不到"
-        }
+        /* 只登录一台的风险不在这里说 —— 那是账号问题，由「我的」页账号卡
+           （AppState.halfLoginWarning）专门提示，免得两处措辞打架。
+           这里只报「数据层面」的不一致。 */
         if cbGot && sbGot, cbAt != sbAt {
             if let h = heal, !h.isEmpty { return h }
             let cbNewer = (cbAt ?? .distantPast) > (sbAt ?? .distantPast)

@@ -152,7 +152,7 @@ struct TimetableView: View {
 
             Button("今天") {
                 week = M.currentWeek
-                pickedDay = M.todayDay()
+                pickedDay = M.todayDay
             }
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 10)

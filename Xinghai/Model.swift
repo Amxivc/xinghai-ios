@@ -414,12 +414,6 @@ enum M {
         return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
 
-    /// 今天周几（1=周一 … 7=周日）
-    static func todayDay() -> Int {
-        let wd = Calendar.current.component(.weekday, from: Date())
-        return wd == 1 ? 7 : wd - 1
-    }
-
     /* ================= 导出工具 ================= */
 
     /// 可导出的记录数（只算「有内容」的）

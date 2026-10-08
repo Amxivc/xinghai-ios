@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CalendarView: View {
     @ObservedObject private var app = AppState.shared

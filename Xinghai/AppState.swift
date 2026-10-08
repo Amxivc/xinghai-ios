@@ -96,10 +96,11 @@ final class AppState: ObservableObject {
     /// 旧写法在只登录一台时会显示「Supabase」，而数据其实来自腾讯云，纯属误导。
     var sourceLabel: String {
         if cbGot && sbGot {
-            if let a = cbAt, let b = sbAt, a != b {
-                return a > b ? "腾讯云（较新）" : "Supabase（较新）"
+            if Cloud.sameVersion(cbAt, sbAt) {
+                return "腾讯云 + Supabase（已一致）"
             }
-            return "腾讯云 + Supabase（已一致）"
+            return (cbAt ?? .distantPast) > (sbAt ?? .distantPast)
+                ? "腾讯云（较新）" : "Supabase（较新）"
         }
         if cbGot { return "腾讯云（只连上一台）" }
         if sbGot { return "Supabase（只连上一台）" }
@@ -118,7 +119,7 @@ final class AppState: ObservableObject {
         let selfName = hasCb ? "腾讯云" : "Supabase"
         let otherName = hasCb ? "Supabase" : "腾讯云"
         let body: String
-        if cbGot && sbGot, cbAt == sbAt {
+        if cbGot && sbGot, Cloud.sameVersion(cbAt, sbAt) {
             body = "两台数据已一致，但你的改动只会写进" + selfName
         } else {
             let otherNewer = hasCb
@@ -276,10 +277,12 @@ final class AppState: ObservableObject {
             // 补写沿用「胜出方」原来的时间戳，而不是当前时间：这样两台写完时间戳就相等，
             // 不会再反复触发补写；万一期间别的设备又写入了更新的版本，也不会被这份补写
             // 盖上（它时间戳更旧，下次读取仍会选中更新的那份）。
+            // 判「不一致」要带容差：网页版一次保存分两次写，相差才几毫秒，
+            // 不当成不一致，否则每读一次就白写一次。
             var heal: String? = nil
             var healTarget = ""
             var healedAt: Date? = nil
-            if let c = cbSnap, let s = sbSnap, c.at != s.at, let p = pick {
+            if let c = cbSnap, let s = sbSnap, !Cloud.sameVersion(c.at, s.at), let p = pick {
                 let target = (p.src == "cb") ? "sb" : "cb"
                 let tok = (target == "cb") ? cbTok : sbTok
                 if !tok.isEmpty {
@@ -329,7 +332,7 @@ final class AppState: ObservableObject {
         /* 只登录一台的风险不在这里说 —— 那是账号问题，由「我的」页账号卡
            （AppState.halfLoginWarning）专门提示，免得两处措辞打架。
            这里只报「数据层面」的不一致。 */
-        if cbGot && sbGot, cbAt != sbAt {
+        if cbGot && sbGot, !Cloud.sameVersion(cbAt, sbAt) {
             if let h = heal, !h.isEmpty { return h }
             let cbNewer = (cbAt ?? .distantPast) > (sbAt ?? .distantPast)
             return (cbNewer ? "Supabase" : "腾讯云") + "的数据比另一台旧"

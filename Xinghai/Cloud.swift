@@ -117,6 +117,19 @@ enum Cloud {
         var src: String        // "cb" / "sb"
     }
 
+    /// 两台时间戳的容差（秒）。**很有必要**：网页版一次「保存」是分两次写给腾讯云和
+    /// Supabase 的，两次取当前时间会差几毫秒（实测生产环境相差 2ms）。
+    /// 不设容差会把「同一时刻的同一份数据」误判成「一旧一新」——
+    /// 界面上会出现「腾讯云落后」这种假警报，而且每次读取都会白白触发一次无意义补写。
+    /// 1 秒足够覆盖这种抖动，又远小于任何真实的改动间隔。
+    static let syncTol: TimeInterval = 1.0
+
+    /// 两份数据算不算「同一版本」
+    static func sameVersion(_ a: Date?, _ b: Date?) -> Bool {
+        guard let a = a, let b = b else { return a == nil && b == nil }
+        return abs(a.timeIntervalSince(b)) <= syncTol
+    }
+
     private static func cbHeaders(_ token: String?) -> [String: String] {
         ["apikey": cbKey,
          "Authorization": "Bearer " + (token ?? cbKey),

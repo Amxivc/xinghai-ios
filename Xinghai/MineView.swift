@@ -140,8 +140,10 @@ struct MineView: View {
         let at = cb ? app.cbAt : app.sbAt
         if !got { return logged ? "取不到" : "未登录，也取不到" }
         guard let at = at else { return logged ? "已连接" : "未登录" }
+        /* 带容差判「最新」：网页版一次保存分两次写，两台会差几毫秒，
+           不加容差会出现「同一分钟里一台最新一台落后」的假警报。 */
         let newest = max(app.cbAt ?? .distantPast, app.sbAt ?? .distantPast)
-        var tag = at >= newest ? "最新" : "落后"
+        var tag = at.addingTimeInterval(Cloud.syncTol) >= newest ? "最新" : "落后"
         if !logged { tag = "未登录 · " + tag }
         return tag + "（" + app.clockText(at) + "）"
     }

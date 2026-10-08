@@ -42,7 +42,23 @@ jobs:
             sleep 14   # 等云端数据加载
             xcrun simctl io "$DEV" screenshot shots/tab$T.png
           done
+          # 回桌面截图：验证 App 图标是否正常显示
+          xcrun simctl terminate "$DEV" com.xinghai.musicpub || true
+          sleep 4
+          xcrun simctl io "$DEV" screenshot shots/home.png
           xcrun simctl shutdown "$DEV" || true
+
+      - name: Verify app icon is compiled into the bundle
+        run: |
+          APP="dd/Build/Products/Debug-iphonesimulator/Xinghai.app"
+          echo "--- Info.plist 图标键 ---"
+          plutil -p "$APP/Info.plist" | grep -i -E "CFBundleIcon" || echo "!! 缺少 CFBundleIcons"
+          echo "--- 包内图标资源 ---"
+          ls -la "$APP" | grep -i -E "Assets.car|Icon" || echo "!! 未找到 Assets.car"
+          echo "--- 编译出的图标 rendition ---"
+          xcrun assetutil --info "$APP/Assets.car" 2>/dev/null \
+            | grep -i -E '"Name" *: *"AppIcon' | sort -u | head -20 \
+            || echo "(assetutil 不可用)"
 
       - name: Zip simulator app (Appetize.io 需要的格式)
         run: |

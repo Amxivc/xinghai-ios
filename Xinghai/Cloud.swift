@@ -51,11 +51,11 @@ enum CloudError: Error {
 /// 运营商递归 DNS 在这种网络下会给出不可达的 Cloudflare 边缘节点，连过去就一直等。
 ///
 /// 解法：自己用 **国内可达的 DoH**（阿里 dns.alidns.com，实测可解析）拿 A 记录，
-/// 再用 IP 直连。直连时 URL 的 host 换成 IP、`Host` 头保持原域名，
-/// iOS 的 URLSession 会用 `Host` 头里的域名做 TLS SNI，证书校验照常通过
-/// —— 所以不需要任何私有 API，也不需要改系统设置。
+/// 再交给 `Net.rawHttps` 用 NWConnection 直连 —— 那里能把「连哪个 IP」和
+/// 「TLS SNI 报哪个域名」分开指定，证书校验照常通过。
+/// 不需要任何私有 API，也不需要改系统设置。
 ///
-/// 全部失败时返回空数组，调用方回退到「照常走域名」，行为与改动前一致。
+/// 全部失败时返回兜底 IP 表，调用方仍会照常尝试，行为不比改动前差。
 enum SbDns {
     /// DoH 端点（按可用性排序）。1.1.1.1 在国内常常连不上，所以放最后。
     private static let doh = [
@@ -87,9 +87,9 @@ enum SbDns {
             guard let enc = host.addingPercentEncoding(
                     withAllowedCharacters: .urlQueryAllowed) else { continue }
             let u = String(format: tpl, enc)
-            if let body = try? plainGet(u), let ips = parseAnswers(body), !ips.isEmpty {
-                found = ips
-                break
+            if let body = try? plainGet(u) {
+                let ips = parseAnswers(body)
+                if !ips.isEmpty { found = ips; break }
             }
         }
         if found.isEmpty { found = fallback }
@@ -134,6 +134,22 @@ enum SbDns {
 
 /// 极简 HTTP（全同步，调用方自行放后台线程）
 enum Net {
+    /// 在闭包间传递连接就绪标志（避免直接捕获 var 触发并发告警）
+    private final class Flag {
+        private let lk = NSLock()
+        private var v = false
+        func set() { lk.lock(); v = true; lk.unlock() }
+        func get() -> Bool { lk.lock(); defer { lk.unlock() }; return v }
+    }
+
+    /// 收数据用的可变缓冲（receive 回调可能跨队列，必须加锁）
+    private final class Buf {
+        private let lk = NSLock()
+        private var d = Data()
+        func add(_ x: Data) { lk.lock(); d.append(x); lk.unlock() }
+        func all() -> Data { lk.lock(); defer { lk.unlock() }; return d }
+    }
+
     static func get(_ url: String, _ headers: [String: String]) throws -> String {
         try request(url, "GET", headers, nil)
     }
@@ -291,11 +307,12 @@ enum Net {
         let conn = NWConnection(host: NWEndpoint.Host(ip),
                                 port: NWEndpoint.Port(rawValue: UInt16(u.port ?? 443))!, using: params)
 
+        /* 连接状态用 Flag 在闭包间传递，避免直接捕获 var 造成并发告警 */
+        let flag = Flag()
         let sem = DispatchSemaphore(value: 0)
-        var ready = false
         conn.stateUpdateHandler = { st in
             switch st {
-            case .ready: ready = true; sem.signal()
+            case .ready: flag.set(); sem.signal()
             case .failed, .cancelled: sem.signal()
             default: break
             }
@@ -303,7 +320,7 @@ enum Net {
         conn.start(queue: .global(qos: .userInitiated))
         /* 直连这一步的总预算要短：本来就是在「系统 DNS 那条路已经失败了」之后才走的，
            再让用户等十几秒没有意义。8 秒连不上就判这个 IP 不行，换下一个。 */
-        if sem.wait(timeout: .now() + 8) == .timedOut || !ready {
+        if sem.wait(timeout: .now() + 8) == .timedOut || !flag.get() {
             conn.cancel()
             throw URLError(.timedOut)
         }
@@ -329,11 +346,12 @@ enum Net {
         var buf = Data(head.utf8)
         buf.append(payload)
 
-        var recv = Data()
+        /* 收数据。recv 在闭包链里被反复 append，用 Buf（带锁）避免并发问题。 */
+        let recv = Buf()
         let sem2 = DispatchSemaphore(value: 0)
         func pump() {
             conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, done, err in
-                if let d = data, !d.isEmpty { recv.append(d) }
+                if let d = data, !d.isEmpty { recv.add(d) }
                 if done || err != nil { sem2.signal(); return }
                 pump()
             }
@@ -345,11 +363,12 @@ enum Net {
         _ = sem2.wait(timeout: .now() + 10)
         conn.cancel()
 
-        guard let headEnd = recv.range(of: Data("\r\n\r\n".utf8)) else {
+        let raw = recv.all()
+        guard let headEnd = raw.range(of: Data("\r\n\r\n".utf8)) else {
             throw URLError(.badServerResponse)
         }
-        let headerText = String(data: recv.subdata(in: 0..<headEnd.lowerBound), encoding: .utf8) ?? ""
-        var bodyData = recv.subdata(in: headEnd.upperBound..<recv.count)
+        let headerText = String(data: raw.subdata(in: 0..<headEnd.lowerBound), encoding: .utf8) ?? ""
+        var bodyData = raw.subdata(in: headEnd.upperBound..<raw.count)
         /* Connection: close 时可能是 chunked；这里简单剥一层 chunked 编码 */
         if headerText.lowercased().contains("transfer-encoding: chunked") {
             bodyData = dechunk(bodyData) ?? bodyData

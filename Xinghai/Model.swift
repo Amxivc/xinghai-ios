@@ -427,6 +427,74 @@ enum M {
         return timeRange(c.s, c.e)
     }
 
+    /* ================= 「早于第一节」 =================
+       有些课安排在 09:00 之前（例：周三器乐与合奏 08:15-08:55）。按节次表折算时
+       08:15 会被吸附到第一节，看起来像「9 点开始」，与实际不符。
+       这里把它单独拎出来：课表在第一节上方多出一行「早于第一节」，早课只落在这一行。
+       判定只看开始时刻（自定义时间优先），所以常规按节次的课永远不会被误判。
+       规则与网页版、安卓版完全一致。 */
+
+    /// 第一节课的开始分钟数（09:00 → 540）
+    static let FIRST_PERIOD_START_MIN = 9 * 60
+
+    /// 课程的开始分钟数（自定义时间优先）；取值失败返回 Int.max（视为不早）
+    static func courseStartMinutes(_ c: Course) -> Int {
+        normalize(c)
+        let m = clockMinutes(courseClock(c, start: true))
+        return m < 0 ? Int.max : m
+    }
+
+    static func isEarly(_ c: Course) -> Bool {
+        let m = courseStartMinutes(c)
+        return m != Int.max && m < FIRST_PERIOD_START_MIN
+    }
+
+    /// 整门课都在第一节课之前（如 08:15-08:55）→ 只占「早于第一节」一行；
+    /// 跨过 09:00 的（如 08:30-09:40）从早课行起、一直连到它落到的小节。
+    static func isEarlyOnly(_ c: Course) -> Bool {
+        if !isEarly(c) { return false }
+        let m = clockMinutes(courseClock(c, start: false))
+        return m < 0 || m <= FIRST_PERIOD_START_MIN
+    }
+
+    /// 课表行号：0 = 早课行，1..13 = 第一~十三节
+    static func rowStartOf(_ c: Course) -> Int { isEarly(c) ? 0 : c.s }
+    static func rowEndOf(_ c: Course) -> Int { isEarlyOnly(c) ? 0 : c.e }
+
+    /// 该成员有没有早课（有则课表最上面多一行）
+    static func hasEarlyCourse(_ p: Person) -> Bool {
+        p.courses.contains { isEarly($0) }
+    }
+
+    /// 早课时段的显示范围，如 "08:15-08:55"（所有早课取并集）
+    static func earlyRange(_ p: Person) -> String {
+        var a = -1, b = -1
+        for c in p.courses where isEarly(c) {
+            let s = clockMinutes(courseClock(c, start: true))
+            var e = clockMinutes(courseClock(c, start: false))
+            if s < 0 { continue }
+            if e < 0 { e = s }
+            if a < 0 || s < a { a = s }
+            if b < 0 || e > b { b = e }
+        }
+        if a < 0 { return "" }
+        return hhmm(a) + "-" + hhmm(b)
+    }
+
+    /// 早课的起始时刻，短写法（8:15），给很窄的时间轴用
+    static func earlyStartShort(_ p: Person) -> String {
+        let r = earlyRange(p)
+        var s = r
+        if let k = r.firstIndex(of: "-") { s = String(r[r.startIndex..<k]) }
+        if s.hasPrefix("0") { s.removeFirst() }
+        return s
+    }
+
+    /// 详情卡里的「节次」文案：整门课早于第一节课时直接写清楚，不然会显示成「第一节」误导人
+    static func sectionLabel(_ c: Course) -> String {
+        isEarlyOnly(c) ? "早于第一节" : periodLabel(c.s, c.e)
+    }
+
     /* ================= 班级分组 ================= */
 
     static func classKey(_ cls: String?) -> Int {

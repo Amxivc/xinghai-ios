@@ -8,6 +8,10 @@ private struct DayCourse: Identifiable {
     let course: Course
     let lane: Int      // 第几道（从 0 起）
     let lanes: Int     // 这一簇共几道
+    let rowStart: Int  // 行号：0 = 早课行，1..13 = 节次
+    let rowEnd: Int
+
+    var rows: Int { rowEnd - rowStart + 1 }
 }
 
 struct TimetableView: View {
@@ -284,7 +288,9 @@ struct TimetableView: View {
     /* ================= 周网格 ================= */
 
     private var weekGrid: some View {
-        GeometryReader { geo in
+        let showEarly = person.map { M.hasEarlyCourse($0) } ?? false
+        let earlyShort = person.map { M.earlyStartShort($0) } ?? ""
+        return GeometryReader { geo in
             let axisW: CGFloat = 34
             let gap: CGFloat = 2
             let rowH: CGFloat = 56
@@ -294,6 +300,21 @@ struct TimetableView: View {
                     // 左侧时间轴
                     VStack(spacing: gap) {
                         Text("").frame(height: 18)
+                        if showEarly {
+                            /* 时间轴只有 34pt 宽，横排的「早于第一节」放不下，
+                               拆成两行 + 起始时刻 */
+                            VStack(spacing: 0) {
+                                Text("早于")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                Text("第一节")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                Text(earlyShort)
+                                    .font(.system(size: 7.5))
+                                    .foregroundColor(.secondary)
+                            }
+                            .foregroundColor(.blue)
+                            .frame(width: axisW, height: rowH)
+                        }
                         ForEach(1...M.periods.count, id: \.self) { p in
                             VStack(spacing: 0) {
                                 Text("\(p)")
@@ -306,7 +327,7 @@ struct TimetableView: View {
                         }
                     }
                     ForEach(1...7, id: \.self) { day in
-                        dayColumn(day, colW: colW, rowH: rowH, gap: gap)
+                        dayColumn(day, colW: colW, rowH: rowH, gap: gap, showEarly: showEarly)
                     }
                 }
                 .padding(6)
@@ -314,8 +335,11 @@ struct TimetableView: View {
         }
     }
 
-    private func dayColumn(_ day: Int, colW: CGFloat, rowH: CGFloat, gap: CGFloat) -> some View {
+    private func dayColumn(_ day: Int, colW: CGFloat, rowH: CGFloat, gap: CGFloat,
+                           showEarly: Bool) -> some View {
         let stride = rowH + gap
+        /* 有早课时所有行号整体下移一行（早课占第 0 行） */
+        let off = showEarly ? 1 : 0
         var list: [(Int, Course)] = []
         if let p = person {
             for (i, c) in p.courses.enumerated() where c.d == day && c.inWeek(week) {
@@ -326,24 +350,28 @@ struct TimetableView: View {
         /* 同一天可能有两门以上课撞在同一时段。以前是每门都铺满整列、只按起始节次位移，
            后画的把先画的整个盖住 —— 所以撞课时只看得到一节。
            现在按「重叠簇」分道：簇里有几门就把列宽平分成几道，
-           与安卓端 CourseGridView.drawDayColumn 的算法一致。 */
+           与安卓端 CourseGridView.drawDayColumn 的算法一致。
+           行号用 M.rowStartOf / rowEndOf：早课落在第 0 行，不会和第一节挤在一起。 */
         list.sort { a, b in
-            if a.1.s != b.1.s { return a.1.s < b.1.s }
-            return a.1.e > b.1.e
+            let sa = M.rowStartOf(a.1), sb = M.rowStartOf(b.1)
+            if sa != sb { return sa < sb }
+            return M.rowEndOf(a.1) > M.rowEndOf(b.1)
         }
         var placed: [DayCourse] = []
         var cursor = 0
         while cursor < list.count {
             var end = cursor
-            var maxEnd = list[cursor].1.e
-            while end + 1 < list.count && list[end + 1].1.s <= maxEnd {
+            var maxEnd = M.rowEndOf(list[cursor].1)
+            while end + 1 < list.count && M.rowStartOf(list[end + 1].1) <= maxEnd {
                 end += 1
-                maxEnd = max(maxEnd, list[end].1.e)
+                maxEnd = max(maxEnd, M.rowEndOf(list[end].1))
             }
             let lanes = end - cursor + 1
             for k in cursor...end {
-                placed.append(DayCourse(id: list[k].0, course: list[k].1,
-                                        lane: k - cursor, lanes: lanes))
+                let c = list[k].1
+                placed.append(DayCourse(id: list[k].0, course: c,
+                                        lane: k - cursor, lanes: lanes,
+                                        rowStart: M.rowStartOf(c), rowEnd: M.rowEndOf(c)))
             }
             cursor = end + 1
         }
@@ -360,6 +388,13 @@ struct TimetableView: View {
             ZStack(alignment: .topLeading) {
                 // 空白格：管理员点击直接新增课程
                 VStack(spacing: gap) {
+                    if showEarly {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.blue.opacity(0.07))
+                            .frame(width: colW, height: rowH)
+                            .contentShape(Rectangle())
+                            .onTapGesture { tapEmpty(day: day, section: 0) }
+                    }
                     ForEach(1...M.periods.count, id: \.self) { p in
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color(UIColor.systemGroupedBackground))
@@ -373,10 +408,10 @@ struct TimetableView: View {
                     let laneW = (colW - laneGap * CGFloat(item.lanes - 1)) / CGFloat(item.lanes)
                     courseBlock(item.course, narrow: item.lanes > 1)
                         .frame(width: laneW,
-                               height: rowH * CGFloat(item.course.span) + gap * CGFloat(item.course.span - 1),
+                               height: rowH * CGFloat(item.rows) + gap * CGFloat(item.rows - 1),
                                alignment: .topLeading)
                         .offset(x: (laneW + laneGap) * CGFloat(item.lane),
-                                y: stride * CGFloat(item.course.s - 1))
+                                y: stride * CGFloat(item.rowStart + off - 1))
                         .contentShape(Rectangle())
                         .onTapGesture { tapCourse(item.id) }
                 }
@@ -472,7 +507,7 @@ struct CourseDetailSheet: View {
                             InfoRow(label: "任课教师", value: c.t)
                             InfoRow(label: "上课教室", value: c.r)
                             InfoRow(label: "星期", value: M.days[max(0, min(6, c.d - 1))])
-                            InfoRow(label: "节次", value: M.periodLabel(c.s, c.e))
+                            InfoRow(label: "节次", value: M.sectionLabel(c))
                             InfoRow(label: "时间", value: M.courseRange(c))
                             InfoRow(label: "上课周次", value: c.w.isEmpty ? "—" : "第 " + c.w + " 周")
                         }

@@ -218,7 +218,8 @@ struct CourseEditorSheet: View {
             } else {
                 DatePicker("开始时间", selection: $customStart, displayedComponents: .hourAndMinute)
                 DatePicker("结束时间", selection: $customEnd, displayedComponents: .hourAndMinute)
-                Text("自定义时间会按学校节次表折算成占用的小节，用于课表排序与冲突判断。")
+                Text("自定义时间会按学校节次表折算成占用的小节，用于课表排序与冲突判断。\n"
+                     + "开始时间早于 09:00 的（如 08:15-08:55）会单独排进课表最上方的「早于第一节」一行。")
                     .font(.caption).foregroundColor(.secondary)
             }
         }

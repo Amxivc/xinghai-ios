@@ -28,8 +28,33 @@ enum Net {
         try request(url, "POST", headers, body)
     }
 
+    /// 网络层抖动自动重试的次数。移动网络下连接被重置（URLError.networkConnectionLost）
+    /// 太常见，一次就放弃会让用户看到「Supabase 失败：Connection reset」而以为云端坏了
+    /// —— 其实再连一次就好。只重试网络层异常，服务器已回话的（4xx/5xx）不重试。
+    private static let retryCount = 2
+
     private static func request(_ urlStr: String, _ method: String,
                                 _ headers: [String: String], _ body: String?) throws -> String {
+        var lastError: Error?
+        for attempt in 0...retryCount {
+            do {
+                return try once(urlStr, method, headers, body)
+            } catch let e as CloudError {
+                throw e                          // 服务器答话了，重试无用
+            } catch let e as URLError where e.code == .timedOut {
+                throw e                          // 每次要等满 20s，再试只是让用户干等
+            } catch {
+                lastError = e
+                if attempt < retryCount {
+                    Thread.sleep(forTimeInterval: 0.4 * Double(attempt + 1))   // 0.4s / 0.8s
+                }
+            }
+        }
+        throw lastError ?? CloudError.badResponse
+    }
+
+    private static func once(_ urlStr: String, _ method: String,
+                             _ headers: [String: String], _ body: String?) throws -> String {
         guard let url = URL(string: urlStr) else { throw CloudError.badUrl }
         var req = URLRequest(url: url)
         req.httpMethod = method

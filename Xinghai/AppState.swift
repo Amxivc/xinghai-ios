@@ -514,11 +514,28 @@ final class AppState: ObservableObject {
         sbUser = nil; sbAdmin = false
     }
 
+    /// 把底层网络异常翻成人话（与安卓端 Net.human 对齐）。
+    /// 以前 "The network connection was lost." 会原样透传，用户只会以为云端坏了。
     static func translate(_ e: Error) -> String {
         if let ce = e as? CloudError { return ce.msg }
+        if let u = e as? URLError {
+            switch u.code {
+            case .notConnectedToInternet: return "网络不可用"
+            case .timedOut: return "网络超时，请重试"
+            case .cannotFindHost: return "网络不可用（域名解析不了）"
+            case .cannotConnectToHost: return "连不上服务器"
+            case .networkConnectionLost: return "网络连接被重置（网络波动，请再试一次）"
+            case .secureConnectionFailed, .serverCertificateUntrusted: return "安全连接失败（SSL）"
+            default: break
+            }
+        }
         let s = e.localizedDescription
-        if s.contains("offline") || s.contains("internet") { return "网络不可用" }
-        if s.contains("timed out") { return "连接超时" }
+        let low = s.lowercased()
+        if low.contains("offline") || low.contains("internet") { return "网络不可用" }
+        if low.contains("timed out") || low.contains("timeout") { return "网络超时，请重试" }
+        if low.contains("connection reset") || low.contains("connection was lost")
+            || low.contains("network connection was lost") { return "网络连接被重置（网络波动，请再试一次）" }
+        if low.contains("could not connect") || low.contains("connection refused") { return "连不上服务器" }
         return s
     }
 }

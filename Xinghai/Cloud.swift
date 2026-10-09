@@ -25,7 +25,8 @@ enum CloudError: Error {
     ///   401/403、invalid_grant / invalid_token / refresh_token_not_found … → 真失效
     ///   其余（URLError、5xx、空响应）→ 网络问题，**凭证原样保留**，稍后重试。
     static func isAuthFailure(_ e: Error) -> Bool {
-        guard case CloudError.http(let code, let body) = e else { return false }
+        guard let ce = e as? CloudError else { return false }
+        guard case .http(let code, let body) = ce else { return false }
         if code == 401 || code == 403 { return true }
         let low = body.lowercased()
         for k in ["invalid_grant", "invalid_token", "refresh_token_not_found",

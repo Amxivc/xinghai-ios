@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject private var app = AppState.shared
     @State private var tab = ContentView.launchTab
+    @Environment(\.scenePhase) private var scenePhase
 
     /// 调试用：启动参数 -tab 0/1/2 可直接打开指定页（云端模拟器截图用）
     static var launchTab: Int {
@@ -26,6 +27,13 @@ struct ContentView: View {
         }
         .overlay(alignment: .top) { toastView }
         .animation(.easeInOut(duration: 0.25), value: app.toast)
+        .onChange(of: scenePhase) { phase in
+            /* 回到前台：网络环境可能已经变了（比如从 5G 换到 Wi-Fi），把「还没补写上
+               的那台」再试一次，静默进行、不打扰用户。
+               这里故意【不】重续登录态 —— refresh_token 是一次性轮换的，频繁续期反而
+               会互相踩（后一次拿到 invalid_grant 反而会把登录态清掉）。 */
+            if phase == .active { app.flushPending() }
+        }
     }
 
     @ViewBuilder

@@ -293,7 +293,7 @@ final class AppState: ObservableObject {
                     done.append((target, iso))
                 } catch {
                     /* 凭证失效 ≠ 网络抖动：前者要么重新登录，要么一直白试，得说清楚 */
-                    if Cloud.isAuthFailure(error) {
+                    if CloudError.isAuthFailure(error) {
                         lastErr = (target == "cb" ? "腾讯云" : "Supabase") + "登录已失效，重新登录后才会补写"
                     } else {
                         lastErr = AppState.translate(error)
@@ -437,7 +437,7 @@ final class AppState: ObservableObject {
                         renewed = true
                     } catch {
                         /* 网络问题别清登录态：清了就再也补不回来（用户那边重登不上） */
-                        if Cloud.isAuthFailure(error) {
+                        if CloudError.isAuthFailure(error) {
                             self.forget("cb", "腾讯云")
                             expired.append("腾讯云")
                         } else {
@@ -462,8 +462,8 @@ final class AppState: ObservableObject {
                         DispatchQueue.main.async { self.sbAdmin = admin }
                         renewed = true
                     } catch {
-                        /* 网络问题别清登录态 —— 见 Cloud.isAuthFailure 的说明 */
-                        if Cloud.isAuthFailure(error) {
+                        /* 网络问题别清登录态 —— 见 CloudError.isAuthFailure 的说明 */
+                        if CloudError.isAuthFailure(error) {
                             self.forget("sb", "Supabase")
                             expired.append("Supabase")
                         } else {

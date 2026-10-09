@@ -65,7 +65,11 @@ struct MineView: View {
                             .foregroundColor(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("未登录").font(.body)
-                            Text("登录后可修改课表与工作安排")
+                            /* 同步中也要说清楚「能不能登录」，否则用户点了没反应会以为坏了。
+                               登录本身是本地动作，和同步并不冲突。 */
+                            Text(app.loading
+                                 ? "正在同步（\(app.syncElapsed)s），仍可正常登录"
+                                 : "登录后可修改课表与工作安排")
                                 .font(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
@@ -115,11 +119,11 @@ struct MineView: View {
             }
 
             Button {
-                app.load()
+                app.load(manual: true)
             } label: {
-                HStack {
-                    if app.loading { ProgressView().padding(.trailing, 6) }
-                    Text(app.loading ? "同步中…" : "立即同步")
+                HStack(spacing: 8) {
+                    if app.loading { ProgressView().scaleEffect(0.85) }
+                    Text(app.loading ? "同步中… \(app.syncElapsed)s" : "立即同步")
                         .font(.subheadline.weight(.medium))
                 }
                 .frame(maxWidth: .infinity)
@@ -127,7 +131,31 @@ struct MineView: View {
             }
             .liquidGlass(cornerRadius: 12)
             .buttonStyle(.plain)
-            .disabled(app.loading)
+            /* 不置灰：同步中再点也应给出一句「正在同步，请稍候」，
+               置灰后点下去毫无反应，用户只会以为界面卡死了。 */
+            .opacity(app.loading ? 0.6 : 1)
+
+            if app.loading {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption2)
+                        Text(app.syncStage.isEmpty ? "正在同步…" : app.syncStage)
+                            .font(.caption)
+                    }
+                    .foregroundColor(.secondary)
+
+                    /* 超过 8 秒补一句解释：让用户知道是网络慢，不是死机 */
+                    if app.syncElapsed >= 8 {
+                        Text(app.syncElapsed >= 20
+                             ? "网络较慢，仍在尝试；超过约 20 秒会自行结束并给出结果"
+                             : "网络较慢，仍在尝试…")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -159,7 +187,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.4.9（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.0（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }
@@ -218,6 +246,18 @@ struct LoginSheet: View {
                     }
                 }
 
+                if app.loading {
+                    Section {
+                        HStack(alignment: .top, spacing: 8) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("云端正在同步（\(app.syncElapsed)s）。可以照常登录，登录成功后会自动重新同步一次。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
                 Section {
                     Button {
                         doLogin()
@@ -236,7 +276,9 @@ struct LoginSheet: View {
                     }
                     .liquidGlass(cornerRadius: 14)
                     .buttonStyle(.plain)
-                    .disabled(busy || email.isEmpty || password.isEmpty)
+                    /* 只锁「登录中」。以前还锁了「邮箱或密码为空」，按钮点下去毫无反应，
+                       用户根本不知道缺什么 —— 现在让他点，缺什么就直说。 */
+                    .disabled(busy)
                 }
             }
             .navigationTitle("登录")
@@ -250,9 +292,15 @@ struct LoginSheet: View {
     }
 
     private func doLogin() {
+        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        /* 以前是按钮直接置灰 —— 点了没动静，用户不知道是缺邮箱还是缺密码 */
+        guard !e.isEmpty, !password.isEmpty else {
+            msg = e.isEmpty ? "请先填邮箱（格式如 xxxxx@xx.com）" : "请先填密码"
+            return
+        }
         busy = true
-        msg = nil
-        app.login(email: email, password: password, mode: mode, remember: remember) { result in
+        msg = app.loading ? "登录中…（云端正在同步，可能稍慢）" : nil
+        app.login(email: e, password: password, mode: mode, remember: remember) { result in
             busy = false
             msg = result
             if app.isLoggedIn {

@@ -9,6 +9,13 @@ final class AppState: ObservableObject {
     @Published var dataSource = "local"   // "cb" / "sb" / "cache" / "local"
     @Published var dataUpdatedAt = ""
     @Published var loading = false
+    /// 同步进行到哪一步、已经等了多久。以前只有一句「同步中…」，跨境那条链路
+    /// 慢起来能等十几秒，界面一动不动，用户以为卡死了 —— 必须让他看见「还活着」。
+    @Published var syncStage = ""
+    @Published var syncElapsed = 0
+    private var syncTick: DispatchSourceTimer? = nil
+    /// 同步途中登录成功 → 记下来，等这轮结束再补一次同步（否则状态卡是旧 token 的结果）
+    private var pendingReload = false
     @Published var banner: String? = nil
 
     @Published var cbUser: String? = nil
@@ -171,6 +178,27 @@ final class AppState: ObservableObject {
     func poke() {
         persons = persons
         works = works
+    }
+
+    /* ================= 同步秒表 ================= */
+
+    /// 「同步中…」要会走秒。跨境那条链路慢起来十几秒，文字一动不动时用户只能
+    /// 猜是不是死机了；秒数一跳，立刻就说明「还活着、在等网络」。
+    private func startSyncTick() {
+        syncTick?.cancel()
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+        t.setEventHandler { [weak self] in
+            guard let self = self, self.loading else { return }
+            self.syncElapsed += 1
+        }
+        t.resume()
+        syncTick = t
+    }
+
+    private func stopSyncTick() {
+        syncTick?.cancel()
+        syncTick = nil
     }
 
     /* ================= 保存到云端 ================= */
@@ -342,9 +370,20 @@ final class AppState: ObservableObject {
     ///
     /// 现在：① 两台都读，谁的时间戳新用谁；② 发现另一台落后而且当前登录着，顺手把最新
     /// 的那份补写过去，让两台自己追平；③ 追不平时把原因写进 cloudNote 显示给用户。
-    func load() {
-        guard !loading else { return }
+    /// - Parameter manual: 是否用户手动点的「立即同步」。手动一定要给结束回话；
+    ///   启动时的自动同步只在失败或明显慢时才出声，免得每次开 App 都弹一句。
+    func load(manual: Bool = false) {
+        /* 同步途中再点一次，以前是 `guard !loading else { return }` 直接吞掉 ——
+           用户点了几下毫无反应，只能干等。现在明确回一句正在干什么。 */
+        guard !loading else {
+            showToast(syncStage.isEmpty ? "正在同步，请稍候…"
+                                        : "正在同步（" + syncStage + "），请稍候…")
+            return
+        }
         loading = true
+        syncStage = "正在读取云端数据…"
+        syncElapsed = 0
+        startSyncTick()
         banner = nil
         let cbTok = cbToken
         let sbTok = sbToken
@@ -354,8 +393,27 @@ final class AppState: ObservableObject {
             var cbSnap: Cloud.Snap? = nil
             var sbSnap: Cloud.Snap? = nil
             var cbErr = "", sbErr = ""
-            do { cbSnap = try Cloud.cbReadSnap() } catch { cbErr = AppState.translate(error) }
-            do { sbSnap = try Cloud.sbReadSnap() } catch { sbErr = AppState.translate(error) }
+            /* 两台【并行】读。串行时总耗时 = 腾讯云 + Supabase，而跨境那条常常是慢的
+               那一个，等于白等两份时间；并行后约等于较慢的那一台，等待直接砍半。 */
+            let box = NSLock()
+            let grp = DispatchGroup()
+            grp.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                var s: Cloud.Snap? = nil
+                var e = ""
+                do { s = try Cloud.cbReadSnap() } catch { e = AppState.translate(error) }
+                box.lock(); cbSnap = s; cbErr = e; box.unlock()
+                grp.leave()
+            }
+            grp.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                var s: Cloud.Snap? = nil
+                var e = ""
+                do { s = try Cloud.sbReadSnap() } catch { e = AppState.translate(error) }
+                box.lock(); sbSnap = s; sbErr = e; box.unlock()
+                grp.leave()
+            }
+            grp.wait()
 
             // 时间戳一样（同一台设备一次双写）时以腾讯云为准
             var pick: Cloud.Snap? = nil
@@ -379,6 +437,8 @@ final class AppState: ObservableObject {
                 let tok = (target == "cb") ? cbTok : sbTok
                 if !tok.isEmpty {
                     healTarget = target
+                    let targetLabel = (target == "cb") ? "腾讯云" : "Supabase"
+                    DispatchQueue.main.async { self.syncStage = "正在把最新数据补写到" + targetLabel + "…" }
                     let iso = Cloud.iso(from: p.at)
                     do {
                         if target == "cb" { try Cloud.cbWrite(p.data, token: tok, iso: iso) }
@@ -393,7 +453,10 @@ final class AppState: ObservableObject {
             }
 
             DispatchQueue.main.async {
+                let secs = self.syncElapsed
+                self.stopSyncTick()
                 self.loading = false
+                self.syncStage = ""
                 self.cbGot = cbSnap != nil
                 self.sbGot = sbSnap != nil
                 self.cbErr = cbErr
@@ -404,6 +467,7 @@ final class AppState: ObservableObject {
                     if healTarget == "cb" { self.cbAt = h } else { self.sbAt = h }
                 }
 
+                var parsed = true
                 if let root = pick?.data, let (ps, ws) = M.fromJson(root) {
                     self.persons = ps
                     self.works = ws
@@ -412,9 +476,29 @@ final class AppState: ObservableObject {
                     self.saveCache(root)
                 } else if self.persons.isEmpty {
                     self.banner = "云端读取失败（腾讯云与 Supabase 均未成功），且本地无缓存"
+                    parsed = false
                 }
 
                 self.cloudNote = self.buildNote(heal: heal)
+
+                /* 同步途中登录成功 → 这轮用的是旧 token，立刻再同步一次。
+                   否则用户会看到「刚登录」和「状态还是未登录」打脸。 */
+                if self.pendingReload {
+                    self.pendingReload = false
+                    self.load()
+                    return
+                }
+
+                /* 结束一定要有回话。以前同步完一声不吭，用户不知道好了没有。 */
+                let both = self.cbGot && self.sbGot
+                guard manual || secs >= 3 || !both else { return }
+                if both && parsed {
+                    self.showToast("同步完成：两台数据已核对")
+                } else if !self.cbGot && !self.sbGot {
+                    self.showToast("同步失败：两台服务器都没读到（见上方状态）")
+                } else {
+                    self.showToast("同步完成，但有 1 台没读到（见上方状态）")
+                }
             }
         }
     }
@@ -508,7 +592,14 @@ final class AppState: ObservableObject {
             }
 
             let result = parts.isEmpty ? "未选择登录方式" : parts.joined(separator: "\n")
-            DispatchQueue.main.async { done(result) }
+            DispatchQueue.main.async {
+                /* 登录成功时若正好在同步，那这一轮用的是登录前的旧凭证 ——
+                   记下来，等它收尾后自动再同步一次，免得状态卡仍显示「未登录」。 */
+                if self.loading && !parts.isEmpty && !parts.allSatisfy({ $0.contains("失败") }) {
+                    self.pendingReload = true
+                }
+                done(result)
+            }
         }
     }
 

@@ -336,6 +336,16 @@ enum M {
         "\(c.d)\u{1}\(normKey(c.n))\u{1}\(normKey(c.r))\u{1}\(normKey(c.t))"
     }
 
+    /// 第 i 节（从 1 起）的起 / 止时刻，如 "09:45" / "10:25"。
+    /// 轴只有 34pt 宽，"09:45-10:25" 会被系统折成「09:45-10」+「:25」，
+    /// 所以两端各自成行显示 —— 与安卓端 CourseGridView.drawAxis 一致。
+    static func periodTime(_ i: Int, start: Bool) -> String {
+        guard (1...periods.count).contains(i) else { return "" }
+        let se = periods[i - 1][1].components(separatedBy: "-")
+        if start { return se.first ?? "" }
+        return se.count > 1 ? se[1] : ""
+    }
+
     /// 课程某端的时刻：自定义时间优先，其次取该节次的起/止时刻
     static func courseClock(_ c: Course, start: Bool) -> String {
         if c.timeMode == "custom" {

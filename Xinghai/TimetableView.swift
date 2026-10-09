@@ -326,7 +326,7 @@ struct TimetableView: View {
                         if showEarly {
                             /* 时间轴只有 34pt 宽，横排的「早于第一节」放不下，
                                拆成两行 + 起始时刻 */
-                            VStack(spacing: 0) {
+                            VStack(spacing: 1) {
                                 Text("早于")
                                     .font(.system(size: 8.5, weight: .bold))
                                 Text("第一节")
@@ -339,11 +339,17 @@ struct TimetableView: View {
                             .frame(width: axisW, height: rowH)
                         }
                         ForEach(1...M.periods.count, id: \.self) { p in
-                            VStack(spacing: 0) {
+                            /* 轴只有 34pt 宽，"09:45-10:25" 横排会被系统折成
+                               「09:45-10」+「:25」，参差不齐很难看。
+                               改成起、止各占一行，和安卓 drawAxis 排法一致。 */
+                            VStack(spacing: 1) {
                                 Text("\(p)")
                                     .font(.system(size: 10, weight: .medium))
-                                Text(M.periods[p - 1][1])
-                                    .font(.system(size: 7))
+                                Text(M.periodTime(p, start: true))
+                                    .font(.system(size: 7.5))
+                                    .foregroundColor(.secondary)
+                                Text(M.periodTime(p, start: false))
+                                    .font(.system(size: 7.5))
                                     .foregroundColor(.secondary)
                             }
                             .frame(width: axisW, height: rowH)

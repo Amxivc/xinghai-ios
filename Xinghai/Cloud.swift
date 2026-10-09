@@ -41,10 +41,12 @@ enum Net {
                 return try once(urlStr, method, headers, body)
             } catch let e as CloudError {
                 throw e                          // 服务器答话了，重试无用
-            } catch let e as URLError where e.code == .timedOut {
-                throw e                          // 每次要等满 20s，再试只是让用户干等
             } catch {
-                lastError = e
+                /* 超时不要重试：每次要等满 20s，再试只是让用户干等。
+                   注意 Swift 的 catch 模式里 where 子句引用不到刚绑定的变量，
+                   只能在体内判（写成 `catch let e as URLError where e.code == ...` 编译不过）。 */
+                if let u = error as? URLError, u.code == .timedOut { throw error }
+                lastError = error
                 if attempt < retryCount {
                     Thread.sleep(forTimeInterval: 0.4 * Double(attempt + 1))   // 0.4s / 0.8s
                 }

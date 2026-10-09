@@ -42,6 +42,11 @@ jobs:
             sleep 14   # 等云端数据加载
             xcrun simctl io "$DEV" screenshot shots/tab$T.png
           done
+          # 早课行验收：定位到有早于第一节课的成员（崔峻嘉 周三 器乐与合奏 08:15-08:55）
+          xcrun simctl terminate "$DEV" com.xinghai.musicpub || true
+          xcrun simctl launch "$DEV" com.xinghai.musicpub -tab 0 -person 崔峻嘉
+          sleep 16
+          xcrun simctl io "$DEV" screenshot shots/early_row.png
           # 回桌面截图：验证 App 图标是否正常显示
           xcrun simctl terminate "$DEV" com.xinghai.musicpub || true
           sleep 4

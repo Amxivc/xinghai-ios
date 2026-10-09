@@ -28,12 +28,31 @@ struct TimetableView: View {
     @State private var showImporter = false
     @State private var pendingCourses: [Course] = []
     @State private var showImportConfirm = false
+    @State private var didApplyLaunchPerson = false
 
     private var person: Person? {
         if app.persons.indices.contains(personIdx) {
             return app.persons[personIdx]
         }
         return app.persons.isEmpty ? nil : app.persons[0]
+    }
+
+    /// 调试用：启动参数 `-person 崔峻嘉` 直接定位到某位成员（云端模拟器截图用）
+    static var launchPerson: String? {
+        ProcessInfo.processInfo.arguments
+            .drop(while: { $0 != "-person" }).dropFirst().first
+    }
+
+    private func applyLaunchPersonIfNeeded() {
+        guard !didApplyLaunchPerson else { return }
+        guard let name = TimetableView.launchPerson, !name.isEmpty else {
+            didApplyLaunchPerson = true
+            return
+        }
+        if let i = app.persons.firstIndex(where: { $0.name == name }) {
+            personIdx = i
+            didApplyLaunchPerson = true
+        }
     }
 
     var body: some View {
@@ -55,7 +74,11 @@ struct TimetableView: View {
                 weekGrid
             }
         }
-        .task { if app.persons.isEmpty { app.load() } }
+        .task {
+            if app.persons.isEmpty { app.load() }
+            applyLaunchPersonIfNeeded()
+        }
+        .onChange(of: app.persons.count) { _ in applyLaunchPersonIfNeeded() }
         .sheet(item: $activeSheet) { s in
             sheetView(s)
         }

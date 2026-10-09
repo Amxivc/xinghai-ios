@@ -319,7 +319,7 @@ final class AppState: ObservableObject {
                     if hadWork && !done.isEmpty { self.showToast("已补写到云端，两台已一致") }
                 } else {
                     self.pushAttempt += 1
-                    self.schedulePush(after: self.pushBackoff[min(self.pushAttempt, pushBackoff.count - 1)])
+                    self.schedulePush(after: self.pushBackoff[min(self.pushAttempt, self.pushBackoff.count - 1)])
                 }
             }
         }

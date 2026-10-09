@@ -170,7 +170,7 @@ struct MineView: View {
                     /* 超过 8 秒补一句解释：让用户知道是网络慢，不是死机 */
                     if app.syncElapsed >= 8 {
                         Text(app.syncElapsed >= 20
-                             ? "网络较慢，仍在尝试；超过约 20 秒会自行结束并给出结果"
+                             ? "境外服务器这条线路较慢，正在换线路重试；腾讯云的数据已经就绪"
                              : "网络较慢，仍在尝试…")
                             .font(.caption2)
                             .foregroundColor(.orange)
@@ -209,7 +209,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.1（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.2（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

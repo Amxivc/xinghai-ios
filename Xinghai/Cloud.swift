@@ -1,4 +1,6 @@
 import Foundation
+import Network
+import Security
 
 enum CloudError: Error {
     case badUrl
@@ -35,6 +37,98 @@ enum CloudError: Error {
             return true
         }
         return false
+    }
+}
+
+/// 走 DNS over HTTPS 解析域名，绕开被污染的运营商 DNS。
+///
+/// **为什么要它**（2026-10-09 实体机实测）：
+/// 同一台 iPhone、同一张中国移动 5G 卡，腾讯云（国内节点）秒连，
+/// 而 `jcaobupbubldipbrzfuo.supabase.co`（Cloudflare 境外节点）一直
+/// `URLError.timedOut` —— 换 WiFi 也一样。安卓端、网页端在同一时段却正常。
+/// 服务器本身没问题（本机实测 DNS 11ms / TCP 153ms / TLS 379ms / REST 200，
+/// 登录、续期、anon 读取全 200）。差别就在「把这个域名解析成哪个 IP」：
+/// 运营商递归 DNS 在这种网络下会给出不可达的 Cloudflare 边缘节点，连过去就一直等。
+///
+/// 解法：自己用 **国内可达的 DoH**（阿里 dns.alidns.com，实测可解析）拿 A 记录，
+/// 再用 IP 直连。直连时 URL 的 host 换成 IP、`Host` 头保持原域名，
+/// iOS 的 URLSession 会用 `Host` 头里的域名做 TLS SNI，证书校验照常通过
+/// —— 所以不需要任何私有 API，也不需要改系统设置。
+///
+/// 全部失败时返回空数组，调用方回退到「照常走域名」，行为与改动前一致。
+enum SbDns {
+    /// DoH 端点（按可用性排序）。1.1.1.1 在国内常常连不上，所以放最后。
+    private static let doh = [
+        "https://dns.alidns.com/resolve?name=%@&type=A",
+        "https://doh.pub/dns-query?name=%@&type=A",
+    ]
+
+    /// 兜底 IP：Cloudflare 给 Supabase 分配的边缘节点，本机实测两个都 200。
+    /// 放在这里是为了「DoH 本身也连不上」时不至于无路可走。
+    static let fallback = ["104.18.38.10", "172.64.149.246"]
+
+    private static var cached: [String: [String]] = [:]
+    private static var cachedAt: [String: Date] = [:]
+    private static let ttl: TimeInterval = 600        // 10 分钟
+    private static let lock = NSLock()
+
+    /// 取某个域名的 A 记录。命中缓存直接返回；否则走 DoH，再不行用兜底表。
+    static func ips(for host: String) -> [String] {
+        lock.lock()
+        if let at = cachedAt[host], Date().timeIntervalSince(at) < ttl,
+           let v = cached[host], !v.isEmpty {
+            lock.unlock()
+            return v
+        }
+        lock.unlock()
+
+        var found: [String] = []
+        for tpl in doh {
+            guard let enc = host.addingPercentEncoding(
+                    withAllowedCharacters: .urlQueryAllowed) else { continue }
+            let u = String(format: tpl, enc)
+            if let body = try? plainGet(u), let ips = parseAnswers(body), !ips.isEmpty {
+                found = ips
+                break
+            }
+        }
+        if found.isEmpty { found = fallback }
+
+        lock.lock()
+        cached[host] = found
+        cachedAt[host] = Date()
+        lock.unlock()
+        return found
+    }
+
+    /// DoH 查询本身用最朴素的 URLSession（不带任何自定义头，避免 DoH 服务挑剔）
+    private static func plainGet(_ urlStr: String) throws -> String {
+        guard let url = URL(string: urlStr) else { throw CloudError.badUrl }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue("application/dns-json", forHTTPHeaderField: "accept")
+        var out: String?
+        var err: Error?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, e in
+            if let e = e { err = e }
+            else { out = String(data: data ?? Data(), encoding: .utf8) }
+            sem.signal()
+        }.resume()
+        sem.wait()
+        if let e = err { throw e }
+        return out ?? ""
+    }
+
+    /// DoH JSON 形如 {"Answer":[{"type":1,"data":"104.18.38.10"}, ...]}
+    private static func parseAnswers(_ body: String) -> [String] {
+        guard let d = body.data(using: .utf8),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let ans = j["Answer"] as? [[String: Any]] else { return [] }
+        return ans.compactMap { a in
+            guard (a["type"] as? Int) == 1 else { return nil }   // 只要 A 记录
+            return a["data"] as? String
+        }
     }
 }
 
@@ -75,12 +169,71 @@ enum Net {
         throw lastError ?? CloudError.badResponse
     }
 
+    /* ============ 域名直连（绕开被污染的运营商 DNS） ============ */
+
+    /// 这次请求要不要走「DoH 解析 + IP 直连」。
+    /// 只对 Supabase 生效：腾讯云是国内域名，走系统 DNS 又快又稳，没必要多绕一圈。
+    private static func pinHost(_ urlStr: String) -> String? {
+        guard urlStr.contains("supabase.co") else { return nil }
+        guard let u = URL(string: urlStr), let h = u.host else { return nil }
+        return h
+    }
+
     private static func once(_ urlStr: String, _ method: String,
                              _ headers: [String: String], _ body: String?) throws -> String {
+        let host = pinHost(urlStr)
+        /* ① 先按原样请求（走系统 DNS）。通就直接用 —— 大多数网络下这就是最快的路。
+           对 Supabase 把这一步的超时压到 5 秒：反正常见失败模式就是「DNS 给的 IP 不可达」，
+           与其让用户干等 20 秒再换路，不如早点切到 IP 直连。 */
+        do {
+            return try onceDirect(urlStr, method, headers, body, timeout: host == nil ? 20 : 5)
+        } catch let e as CloudError {
+            throw e                                    // 服务器答话了（4xx/5xx），换 IP 也无用
+        } catch {
+            guard let host = host else { throw error }
+            /* 超时 / 连不上 / 连接被重置 → 极可能是 DNS 给的 IP 不可达，换我们自己解析的。
+               其它错误（证书、地址非法）不折腾，直接抛。 */
+            guard isConnFailure(error) else { throw error }
+
+            /* ② DoH 解析 + 逐个 IP 直连。
+               走 NWConnection 而不是 URLSession：URLSession 的 SNI 取决于 URL 的 host，
+               换成 IP 后 SNI 就成了 IP，Cloudflare 会回一张不含该域名的证书，校验必然失败。
+               NWConnection 让我们显式指定 SNI（仍用原域名），连的是 IP —— 两者各就各位。 */
+            var last = error
+            for ip in SbDns.ips(for: host) {
+                do {
+                    return try rawHttps(ip: ip, sni: host, urlStr: urlStr,
+                                        method: method, headers: headers, body: body)
+                } catch let e as CloudError {
+                    throw e                            // 服务器答话了，别再换 IP 了
+                } catch {
+                    last = error
+                }
+            }
+            throw last
+        }
+    }
+
+    /// 网络层「连不上」类错误 —— 只有这类才值得换 IP 重来
+    private static func isConnFailure(_ e: Error) -> Bool {
+        guard let u = e as? URLError else { return false }
+        switch u.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost,
+             .networkConnectionLost, .notConnectedToInternet,
+             .dnsLookupFailed, .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func onceDirect(_ urlStr: String, _ method: String,
+                                   _ headers: [String: String], _ body: String?,
+                                   timeout: TimeInterval) throws -> String {
         guard let url = URL(string: urlStr) else { throw CloudError.badUrl }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.timeoutInterval = 20
+        req.timeoutInterval = timeout
         // 与安卓端 Net.java 对齐：Accept 始终带；有 body 时必须声明 JSON，
         // 否则 Supabase(GoTrue) 回 "Could not parse request body as JSON"，
         // 腾讯云网关的 OIDC 层也会解析失败。
@@ -114,6 +267,118 @@ enum Net {
             throw CloudError.http(outStatus, errorMessage(text))
         }
         return text
+    }
+
+    /* ============ 裸 HTTPS：连 IP，SNI 用域名 ============ */
+
+    /// 自己用 NWConnection 发一次 HTTPS 请求。
+    ///
+    /// 为什么要「裸」写：URLSession 的 SNI 跟着 URL 的 host 走，host 换成 IP 后
+    /// SNI 就成了 IP，Cloudflare 会返回一张不含 supabase.co 的证书 → 校验失败。
+    /// NWConnection 允许【目标地址】和【SNI】分开指定：连 `104.18.38.10:443`，
+    /// TLS 里报 `jcaobupbubldipbrzfuo.supabase.co`，于是证书校验正常通过，
+    /// 而 DNS 被完全绕开 —— 这套系统 DNS 给出坏 IP 的场景的唯一解。
+    private static func rawHttps(ip: String, sni: String, urlStr: String,
+                                 method: String, headers: [String: String],
+                                 body: String?) throws -> String {
+        guard let u = URL(string: urlStr), let host = u.host else { throw CloudError.badUrl }
+        var path = u.path.isEmpty ? "/" : u.path
+        if let q = u.query { path += "?" + q }
+
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, sni)
+        let params = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
+        let conn = NWConnection(host: NWEndpoint.Host(ip),
+                                port: NWEndpoint.Port(rawValue: UInt16(u.port ?? 443))!, using: params)
+
+        let sem = DispatchSemaphore(value: 0)
+        var ready = false
+        conn.stateUpdateHandler = { st in
+            switch st {
+            case .ready: ready = true; sem.signal()
+            case .failed, .cancelled: sem.signal()
+            default: break
+            }
+        }
+        conn.start(queue: .global(qos: .userInitiated))
+        /* 直连这一步的总预算要短：本来就是在「系统 DNS 那条路已经失败了」之后才走的，
+           再让用户等十几秒没有意义。8 秒连不上就判这个 IP 不行，换下一个。 */
+        if sem.wait(timeout: .now() + 8) == .timedOut || !ready {
+            conn.cancel()
+            throw URLError(.timedOut)
+        }
+
+        /* 组请求。Host 用域名（HTTP 层也是按域名路由），Content-Length 自己算。 */
+        var head = "\(method) \(path) HTTP/1.1\r\nHost: \(host)\r\n"
+        head += "Accept: application/json\r\n"
+        head += "Connection: close\r\n"
+        var seenCT = false
+        for (k, v) in headers {
+            if k.lowercased() == "host" { continue }
+            if k.lowercased() == "content-type" { seenCT = true }
+            head += "\(k): \(v)\r\n"
+        }
+        var payload = Data()
+        if let b = body {
+            payload = Data(b.utf8)
+            if !seenCT { head += "Content-Type: application/json; charset=utf-8\r\n" }
+            head += "Content-Length: \(payload.count)\r\n"
+        }
+        head += "\r\n"
+
+        var buf = Data(head.utf8)
+        buf.append(payload)
+
+        var recv = Data()
+        let sem2 = DispatchSemaphore(value: 0)
+        func pump() {
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, done, err in
+                if let d = data, !d.isEmpty { recv.append(d) }
+                if done || err != nil { sem2.signal(); return }
+                pump()
+            }
+        }
+        conn.send(content: buf, completion: .contentProcessed { err in
+            if err != nil { sem2.signal(); return }
+            pump()
+        })
+        _ = sem2.wait(timeout: .now() + 10)
+        conn.cancel()
+
+        guard let headEnd = recv.range(of: Data("\r\n\r\n".utf8)) else {
+            throw URLError(.badServerResponse)
+        }
+        let headerText = String(data: recv.subdata(in: 0..<headEnd.lowerBound), encoding: .utf8) ?? ""
+        var bodyData = recv.subdata(in: headEnd.upperBound..<recv.count)
+        /* Connection: close 时可能是 chunked；这里简单剥一层 chunked 编码 */
+        if headerText.lowercased().contains("transfer-encoding: chunked") {
+            bodyData = dechunk(bodyData) ?? bodyData
+        }
+        let text = String(data: bodyData, encoding: .utf8) ?? ""
+        let first = headerText.split(separator: "\r\n").first.map(String.init) ?? ""
+        guard let code = Int(first.split(separator: " ").dropFirst().first ?? "") else {
+            throw URLError(.badServerResponse)
+        }
+        if code >= 400 { throw CloudError.http(code, errorMessage(text)) }
+        return text
+    }
+
+    /// 剥掉 HTTP/1.1 chunked 传输编码
+    private static func dechunk(_ d: Data) -> Data? {
+        var out = Data()
+        var i = d.startIndex
+        while i < d.endIndex {
+            guard let nl = d[i...].range(of: Data("\r\n".utf8)) else { return out }
+            let sizeStr = String(data: d[i..<nl.lowerBound], encoding: .utf8)?
+                .split(separator: ";").first.map(String.init) ?? ""
+            guard let size = Int(sizeStr.trimmingCharacters(in: .whitespaces), radix: 16) else { return out }
+            i = nl.upperBound
+            if size == 0 { break }
+            let end = d.index(i, offsetBy: size, limitedBy: d.endIndex) ?? d.endIndex
+            out.append(d[i..<end])
+            i = d.index(end, offsetBy: 2, limitedBy: d.endIndex) ?? d.endIndex
+        }
+        return out
     }
 
     private static func errorMessage(_ body: String) -> String {

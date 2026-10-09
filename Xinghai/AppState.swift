@@ -776,7 +776,7 @@ final class AppState: ObservableObject {
         if let u = e as? URLError {
             switch u.code {
             case .notConnectedToInternet: return "网络不可用"
-            case .timedOut: return "网络超时，请重试"
+            case .timedOut: return "网络超时（已尝试更换线路仍不通）"
             case .cannotFindHost: return "网络不可用（域名解析不了）"
             case .cannotConnectToHost: return "连不上服务器"
             case .networkConnectionLost: return "网络连接被重置（网络波动，请再试一次）"

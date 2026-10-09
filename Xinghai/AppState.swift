@@ -18,6 +18,20 @@ final class AppState: ObservableObject {
     private var pendingReload = false
     @Published var banner: String? = nil
 
+    /* ---- 落后那台的「待补写」队列：腾讯云优先，跨境那台后台静默补 ---- */
+    /// 界面用：现在还有哪些台没写上（"cb" / "sb"）
+    @Published var pendingTargets: [String] = []
+    /// 最近一次补写为什么没成（空串 = 队列是空的或还没失败过）
+    @Published var pendingNote = ""
+    /// 目标 → ["iso": 时间戳, "data": 整份快照]。只保留最新一份，幂等，不会堆积。
+    private var pending: [String: [String: Any]] = [:]
+    private var pushAttempt = 0
+    private var pushTimer: DispatchWorkItem? = nil
+    private var flushing = false
+    /// 重试节奏（秒）：先密后疏，封顶 15 分钟。
+    /// 跨境那台「有访问时效」，不能高频戳；但也别等到用户下次打开才补。
+    private let pushBackoff: [Double] = [5, 15, 45, 120, 300, 900]
+
     @Published var cbUser: String? = nil
     @Published var cbAdmin = false
     @Published var sbUser: String? = nil
@@ -157,6 +171,8 @@ final class AppState: ObservableObject {
             }
         }
         loadCache()
+        /* 上次没写成功的那些改动要先捡回来：凭证也在，续期之后就能补上。 */
+        loadPending()
         // 顺序不能反：先把登录态续上（access_token 只有 2 小时），再去读云端。
         // 续期结束会回调 load()，缓存已经先上屏了，所以用户看不到空档。
         renewSession { [weak self] in self?.load() }
@@ -201,14 +217,129 @@ final class AppState: ObservableObject {
         syncTick = nil
     }
 
+    /* ================= 待补写队列 ================= */
+
+    /// 队列落盘。进程被杀、切后台被回收都不该丢掉「还欠一次写」这件事。
+    private var pendingUrl: URL? {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("pending.json")
+    }
+
+    private func loadPending() {
+        guard pending.isEmpty, let url = pendingUrl, let d = try? Data(contentsOf: url),
+              let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: [String: Any]]
+        else { return }
+        pending = j
+        pendingTargets = pending.keys.sorted()
+        if !pending.isEmpty { schedulePush(after: 1) }   // 一启动就试一次，不打扰用户
+    }
+
+    private func savePending() {
+        guard let url = pendingUrl else { return }
+        if pending.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        if let d = try? JSONSerialization.data(withJSONObject: pending) {
+            try? d.write(to: url, options: .atomic)
+        }
+    }
+
+    /// 记下「这台没写上」，稍后在后台补。同一台只留最新一份快照（后到的覆盖先到的）。
+    private func enqueue(_ target: String, data: [String: Any], iso: String) {
+        pending[target] = ["iso": iso, "data": data]
+        savePending()
+        pendingTargets = pending.keys.sorted()
+        schedulePush(after: pushBackoff[min(pushAttempt, pushBackoff.count - 1)])
+    }
+
+    private func schedulePush(after delay: Double) {
+        pushTimer?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.flushPending() }
+        pushTimer = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    /// 静默补写：把队列里最新那份快照写到各自那台。
+    /// 成功 → 出队；失败 → 退避后再来，一直补到成功为止。
+    ///
+    /// 只在主线程调（自己被 main.asyncAfter / 主线程事件触发），用 `flushing` 串行化，
+    /// 免得两次补写交叉把同一台写成新旧两份。
+    func flushPending() {
+        if flushing { schedulePush(after: 2); return }   // 上一轮还在跑，等它
+        guard !pending.isEmpty else { return }
+        flushing = true
+        let jobs = pending
+        let cbTok = cbToken
+        let sbTok = sbToken
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            var done: [(String, String)] = []      // (目标, 写出去的 iso)
+            var lastErr = ""
+            for (target, job) in jobs {
+                guard let data = job["data"] as? [String: Any],
+                      let iso = job["iso"] as? String else {
+                    done.append((target, ""))      // 残缺任务直接丢
+                    continue
+                }
+                let tok = (target == "cb") ? cbTok : sbTok
+                if tok.isEmpty {
+                    lastErr = (target == "cb" ? "腾讯云" : "Supabase") + "未登录，登录后会自动补写"
+                    continue                       // 没登录写不了，留着等登录
+                }
+                do {
+                    if target == "cb" { try Cloud.cbWrite(data, token: tok, iso: iso) }
+                    else { try Cloud.sbWrite(data, token: tok, iso: iso) }
+                    done.append((target, iso))
+                } catch {
+                    /* 凭证失效 ≠ 网络抖动：前者要么重新登录，要么一直白试，得说清楚 */
+                    if Cloud.isAuthFailure(error) {
+                        lastErr = (target == "cb" ? "腾讯云" : "Supabase") + "登录已失效，重新登录后才会补写"
+                    } else {
+                        lastErr = AppState.translate(error)
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                let hadWork = !self.pending.isEmpty
+                for (target, iso) in done {
+                    /* 比较后再删：写的过程中用户可能又存了一次，
+                       此时 pending 里已经是更新的 iso，不能把新的当成写成功了删掉。 */
+                    if iso.isEmpty || (self.pending[target]?["iso"] as? String) == iso {
+                        self.pending.removeValue(forKey: target)
+                    }
+                }
+                self.savePending()
+                self.pendingTargets = self.pending.keys.sorted()
+                self.pendingNote = self.pending.isEmpty ? "" : lastErr
+                self.flushing = false
+
+                if self.pending.isEmpty {
+                    self.pushAttempt = 0
+                    if hadWork && !done.isEmpty { self.showToast("已补写到云端，两台已一致") }
+                } else {
+                    self.pushAttempt += 1
+                    self.schedulePush(after: self.pushBackoff[min(self.pushAttempt, pushBackoff.count - 1)])
+                }
+            }
+        }
+    }
+
     /* ================= 保存到云端 ================= */
 
     /// 乐观更新：调用方先改内存数据，失败时由 revert 回滚现场。
     ///
-    /// 旧写法是「两台里写成一台就 ok」，本地缓存也照存。于是在只登录一台、或某台报错时，
-    /// 界面提示成功、本地也留下了改动，但另一台仍是旧数据，下次进来就被覆盖回去。
-    /// 现在：① 两台共用同一个时间戳（也是读取端挑数据的依据）；② 一台都没写成 = 失败，
-    /// 且不落本地缓存；③ 写成了但不齐，提示里如实说清缺了哪台、为什么。
+    /// **写入顺序按「哪台快、哪台稳」定：腾讯云在国内，先写它。** 它成了就立刻告诉
+    /// 用户「保存好了」，不必陪着跨境那台干等。跨境那台（Supabase）写不上就进后台
+    /// 队列，静默重试到成功为止（见 flushPending）。
+    ///
+    /// 为什么不能两台都等着：用户那边到 supabase.co 的连接经常被重置，一次保存能卡
+    /// 半分钟以上，体感就是「界面死了」，卡住期间还存不了东西。
+    ///
+    /// **所有 Supabase 写入都走队列**（不再inline 写），不然「先发的慢请求后到」
+    /// 会把新的覆盖成旧的 —— 队列是串行的，天然没这个问题。
+    ///
+    /// 失败语义：腾讯云写不上、且 Supabase 也没登录 → 才算真失败（回滚、不落缓存）。
     func saveData(_ okMsg: String, revert: (() -> Void)? = nil) {
         guard !saving else {
             revert?()
@@ -224,53 +355,48 @@ final class AppState: ObservableObject {
             guard let self = self else { return }
             let payload = M.toJson(persons: personsSnapshot, works: worksSnapshot)
             let iso = Cloud.nowIsoText()
+            let at = Cloud.parseIso(iso)
+            let head = okMsg.isEmpty ? "已保存" : okMsg
 
-            var cbOk = false, sbOk = false
-            var cbMsg = "腾讯云未登录", sbMsg = "Supabase 未登录"
+            /* ① 腾讯云先写（快、稳），成了立刻给用户交代 */
+            var cbOk = false
+            var cbMsg = "腾讯云未登录"
             if !cbTok.isEmpty {
                 do { try Cloud.cbWrite(payload, token: cbTok, iso: iso); cbOk = true }
                 catch { cbMsg = AppState.translate(error) }
             }
-            if !sbTok.isEmpty {
-                do { try Cloud.sbWrite(payload, token: sbTok, iso: iso); sbOk = true }
-                catch { sbMsg = AppState.translate(error) }
-            }
-
-            let ok = cbOk || sbOk
-            let at = Cloud.parseIso(iso)
-
-            var msg = ""
-            if cbOk && sbOk {
-                msg = "已保存到腾讯云 + Supabase"
-            } else if ok {
-                let missing = cbOk ? "Supabase" : "腾讯云"
-                let why = cbOk ? sbMsg : cbMsg
-                let missingLogged = cbOk ? !sbTok.isEmpty : !cbTok.isEmpty
-                msg = "已保存到" + (cbOk ? "腾讯云" : "Supabase")
-                    + (missingLogged ? "，\(missing)写入失败：\(why)"
-                                     : "，\(missing)未登录，该端仍是旧数据")
-            } else if cbTok.isEmpty && sbTok.isEmpty {
-                msg = "请先登录再保存"
-            } else {
-                msg = "保存失败：" + (cbTok.isEmpty ? sbMsg : cbMsg)
-            }
 
             DispatchQueue.main.async {
                 self.saving = false
-                if ok {
+                if cbOk {
                     self.saveCache(payload)
-                    if cbOk { self.dataSource = "cb" } else if sbOk { self.dataSource = "sb" }
+                    self.dataSource = "cb"
                     self.dataUpdatedAt = self.clockText(at ?? Date())
-                    if cbOk { self.cbAt = at }
-                    if sbOk { self.sbAt = at }
-                    self.cloudNote = self.buildNote(heal: nil)
+                    self.cbAt = at
                     self.poke()
-                    self.showToast(okMsg.isEmpty ? msg : okMsg + "（" + msg + "）")
-                } else {
+                    /* 跨境那台交给后台，不阻塞、也不弹错 */
+                    self.enqueue("sb", data: payload, iso: iso)
+                    self.cloudNote = self.buildNote(heal: nil)
+                    self.showToast(head + "（已保存到腾讯云，正在同步 Supabase…）")
+                    self.schedulePush(after: 0.2)          // 正常情况这时就补上了
+                    return
+                }
+
+                /* 腾讯云没写上：Supabase 也没登录的话，才是真失败 */
+                if sbTok.isEmpty {
                     revert?()
                     self.poke()
-                    self.showToast(msg)
+                    self.showToast(cbTok.isEmpty ? "请先登录再保存" : "保存失败：" + cbMsg)
+                    return
                 }
+                /* 两台都交给队列去重试，本地先当保存成功（改动不会丢） */
+                self.saveCache(payload)
+                self.enqueue("cb", data: payload, iso: iso)
+                self.enqueue("sb", data: payload, iso: iso)
+                self.cloudNote = "腾讯云这次没写上（" + cbMsg + "），已在后台自动重试"
+                self.poke()
+                self.showToast(head + "（腾讯云写入失败，已在后台重试）")
+                self.schedulePush(after: 0.2)
             }
         }
     }
@@ -292,6 +418,7 @@ final class AppState: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
             var expired: [String] = []
+            var offline: [String] = []     // 只是这次没续上（网络问题），凭证留着
             var renewed = false
 
             if self.cbUser != nil {
@@ -309,8 +436,13 @@ final class AppState: ObservableObject {
                         DispatchQueue.main.async { self.cbAdmin = admin }
                         renewed = true
                     } catch {
-                        self.forget("cb", "腾讯云")
-                        expired.append("腾讯云")
+                        /* 网络问题别清登录态：清了就再也补不回来（用户那边重登不上） */
+                        if Cloud.isAuthFailure(error) {
+                            self.forget("cb", "腾讯云")
+                            expired.append("腾讯云")
+                        } else {
+                            offline.append("腾讯云")
+                        }
                     }
                 }
             }
@@ -330,8 +462,13 @@ final class AppState: ObservableObject {
                         DispatchQueue.main.async { self.sbAdmin = admin }
                         renewed = true
                     } catch {
-                        self.forget("sb", "Supabase")
-                        expired.append("Supabase")
+                        /* 网络问题别清登录态 —— 见 Cloud.isAuthFailure 的说明 */
+                        if Cloud.isAuthFailure(error) {
+                            self.forget("sb", "Supabase")
+                            expired.append("Supabase")
+                        } else {
+                            offline.append("Supabase")
+                        }
                     }
                 }
             }
@@ -342,8 +479,19 @@ final class AppState: ObservableObject {
                         + "登录已过期，请重新登录；否则改动只会写进另一台")
                 }
             }
+            if !offline.isEmpty {
+                /* 只是没连上，凭证还在。不说清楚的话，用户会以为又掉登录了。 */
+                DispatchQueue.main.async {
+                    self.pendingNote = offline.joined(separator: " / ")
+                        + "这次没连上（凭证已保留，稍后自动重试）"
+                }
+            }
             if renewed { DispatchQueue.main.async { self.poke() } }
-            DispatchQueue.main.async { done?() }
+            DispatchQueue.main.async {
+                done?()
+                // 续期之后立刻把还没补上的写出去（跨境那台连上了就能收尾）
+                self.flushPending()
+            }
         }
     }
 
@@ -492,7 +640,11 @@ final class AppState: ObservableObject {
                 /* 结束一定要有回话。以前同步完一声不吭，用户不知道好了没有。 */
                 let both = self.cbGot && self.sbGot
                 guard manual || secs >= 3 || !both else { return }
-                if both && parsed {
+                if !self.pendingTargets.isEmpty {
+                    self.showToast("同步完成，但还有「"
+                        + self.pendingTargets.map { $0 == "cb" ? "腾讯云" : "Supabase" }.joined(separator: " / ")
+                        + "」待补写，正在后台重试")
+                } else if both && parsed {
                     self.showToast("同步完成：两台数据已核对")
                 } else if !self.cbGot && !self.sbGot {
                     self.showToast("同步失败：两台服务器都没读到（见上方状态）")
@@ -599,6 +751,10 @@ final class AppState: ObservableObject {
                     self.pendingReload = true
                 }
                 done(result)
+                /* 登录成功 = 队列里那台现在能写了，立刻把欠的补上 */
+                if !parts.isEmpty && !parts.allSatisfy({ $0.contains("失败") }) {
+                    self.flushPending()
+                }
             }
         }
     }

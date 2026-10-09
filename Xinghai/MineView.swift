@@ -118,6 +118,28 @@ struct MineView: View {
                 }
             }
 
+            /* 还有没写上的那台 —— Supabase 连不上时全靠这条说明「改动没丢、正在补」 */
+            if !app.pendingTargets.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundColor(.blue)
+                        .font(.caption)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("待补写：" + app.pendingTargets
+                                .map { $0 == "cb" ? "腾讯云" : "Supabase" }
+                                .joined(separator: " / "))
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        Text(app.pendingNote.isEmpty
+                             ? "正在后台静默重试，成功后自动写入"
+                             : app.pendingNote + "；会自动重试")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
             Button {
                 app.load(manual: true)
             } label: {
@@ -187,7 +209,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.0（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.1（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

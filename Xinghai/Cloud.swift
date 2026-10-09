@@ -4,7 +4,6 @@ enum CloudError: Error {
     case badUrl
     case badResponse
     case http(Int, String)
-
     var msg: String {
         switch self {
         case .badUrl: return "地址无效"
@@ -15,6 +14,26 @@ enum CloudError: Error {
             if low.contains("failed to fetch") || low.contains("network") { return "网络连接失败" }
             return m.isEmpty ? "请求被拒绝" : m
         }
+    }
+
+    /// 这个错误是「凭证真的失效」吗？**只有它才配把登录态清掉。**
+    ///
+    /// 以前续期失败一律 `forget()`，可网络抖动（超时 / 连接被重置 / 域名解析不了）
+    /// 走的是同一个 catch —— 信号一差就把 Supabase 的登录凭证抹掉，之后再也补不回来
+    /// （用户那边又登不上 Supabase），表现成「只有这一台，登不登录都读不到那边的数据」，
+    /// 而且每次启动都会再抹一遍。必须分开：
+    ///   401/403、invalid_grant / invalid_token / refresh_token_not_found … → 真失效
+    ///   其余（URLError、5xx、空响应）→ 网络问题，**凭证原样保留**，稍后重试。
+    static func isAuthFailure(_ e: Error) -> Bool {
+        guard case CloudError.http(let code, let body) = e else { return false }
+        if code == 401 || code == 403 { return true }
+        let low = body.lowercased()
+        for k in ["invalid_grant", "invalid_token", "refresh_token_not_found",
+                  "token has expired", "invalid jwt", "invalid claim",
+                  "invalid login credentials", "user_not_found"] where low.contains(k) {
+            return true
+        }
+        return false
     }
 }
 

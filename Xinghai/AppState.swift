@@ -27,6 +27,11 @@ final class AppState: ObservableObject {
     /// 两台各自是否取到了数据
     @Published var cbGot = false
     @Published var sbGot = false
+    /// 两台各自读取失败的原因（成功则空串）。
+    /// 以前这里是 `try? Cloud.sbReadSnap()` —— 失败静默变 nil，界面上只剩「取不到」三个字，
+    /// 用户和我们都没法判断到底是断网、超时、连接被重置还是 401。必须把原因留下来。
+    @Published var cbErr = ""
+    @Published var sbErr = ""
     /// 需要提醒用户的一致性提示（空串 = 没问题）
     @Published var cloudNote = ""
 
@@ -348,8 +353,9 @@ final class AppState: ObservableObject {
 
             var cbSnap: Cloud.Snap? = nil
             var sbSnap: Cloud.Snap? = nil
-            cbSnap = try? Cloud.cbReadSnap()
-            sbSnap = try? Cloud.sbReadSnap()
+            var cbErr = "", sbErr = ""
+            do { cbSnap = try Cloud.cbReadSnap() } catch { cbErr = AppState.translate(error) }
+            do { sbSnap = try Cloud.sbReadSnap() } catch { sbErr = AppState.translate(error) }
 
             // 时间戳一样（同一台设备一次双写）时以腾讯云为准
             var pick: Cloud.Snap? = nil
@@ -390,6 +396,8 @@ final class AppState: ObservableObject {
                 self.loading = false
                 self.cbGot = cbSnap != nil
                 self.sbGot = sbSnap != nil
+                self.cbErr = cbErr
+                self.sbErr = sbErr
                 self.cbAt = cbSnap?.at
                 self.sbAt = sbSnap?.at
                 if let h = healedAt {

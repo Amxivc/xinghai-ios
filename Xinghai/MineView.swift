@@ -138,7 +138,13 @@ struct MineView: View {
         let logged = cb ? app.isCbLogged : app.isSbLogged
         let got = cb ? app.cbGot : app.sbGot
         let at = cb ? app.cbAt : app.sbAt
-        if !got { return logged ? "取不到" : "未登录，也取不到" }
+        if !got {
+            /* 取不到时把原因一并说出来：以前只显示「取不到」，看不出是断网、
+               超时、连接被重置还是 401，用户和我们都没法定位。 */
+            let why = cb ? app.cbErr : app.sbErr
+            let base = logged ? "取不到" : "未登录，也取不到"
+            return why.isEmpty ? base : base + "：" + why
+        }
         guard let at = at else { return logged ? "已连接" : "未登录" }
         /* 带容差判「最新」：网页版一次保存分两次写，两台会差几毫秒，
            不加容差会出现「同一分钟里一台最新一台落后」的假警报。 */
@@ -153,7 +159,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.4.8（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.4.9（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

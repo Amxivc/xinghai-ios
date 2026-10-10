@@ -71,6 +71,139 @@ final class AppState: ObservableObject {
     private var knownMembers = 0
     private var knownCourses = 0
 
+    /* ---- 数据版本号 + 本机历史快照（v0.5.6 起） ----
+     *
+     * 版本号：每次保存 +1，回滚也 +1（**不回退**），写在数据的 _meta.ver 里跟着上云。
+     * 回退会让同一个号出现两次，用户就没法指认「我说的 v12 是哪一版」。
+     *
+     * 本机历史：UserDefaults 里存最近 localSlots 份完整快照。读取最快、离线可用，
+     * 是「云端那 20 槽」的本地兜底。一份约 80KB，10 份 ≈ 800KB，扛得住。
+     */
+    static let localSlots = 10
+    @Published var curVer = 0
+    private var localHistory: [[String: Any]] = []
+
+    /// 当前版本号（从 UserDefaults 恢复；0 = 还没编过号的老数据）
+    func restoreVerNo() {
+        curVer = d.integer(forKey: "data_version_no")
+        if let raw = d.array(forKey: "history_local") as? [[String: Any]] {
+            localHistory = raw
+        }
+    }
+
+    /// 写一个新版本号。只增不减 —— 回滚后也必须继续往上走。
+    @discardableResult
+    private func bumpVerNo(candidate: Int = 0) -> Int {
+        let v = max(curVer, candidate) + 1
+        curVer = v
+        d.set(v, forKey: "data_version_no")
+        return v
+    }
+
+    /// 云端数据带的版本号更大时把本机基准抬高（换设备 / 重装后接得上）
+    private func syncVerNo(from data: [String: Any]?) {
+        let cloud = Cloud.readVer(data)
+        if cloud > curVer { curVer = cloud; d.set(cloud, forKey: "data_version_no") }
+    }
+
+    /// 留一版：本机一份（快）+ 腾讯云一份（跨设备）。都不阻塞保存主流程。
+    private func snapshot(_ label: String, ver: Int) {
+        let payload = M.toJson(persons: persons, works: works)
+        let iso = Cloud.nowIsoText()
+        var c = 0
+        for p in persons { c += p.courses.count }
+        var item: [String: Any] = [
+            "at": iso, "label": label, "members": persons.count,
+            "courses": c, "works": works.count, "ver": ver, "data": payload,
+        ]
+        var next = [item]
+        next.append(contentsOf: localHistory.prefix(AppState.localSlots - 1))
+        localHistory = Array(next.prefix(AppState.localSlots))
+        d.set(localHistory, forKey: "history_local")
+
+        let tok = tok("cb_token")
+        guard !tok.isEmpty else { return }
+        let mm = persons.count
+        let payloadCopy = payload
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let rows = try Cloud.cbHisSlots(token: tok)
+                let slot = Cloud.pickHisSlot(rows)
+                let hp = Cloud.buildHistoryPayload(payloadCopy, label: label,
+                                                   members: mm, courses: c,
+                                                   works: item["works"] as? Int ?? 0, ver: ver)
+                try Cloud.cbWriteHistory(slot: slot, data: hp, iso: iso, token: tok)
+            } catch { /* 历史留档失败不影响保存本身 */ }
+        }
+    }
+
+    /// 读本机历史（按时间倒序）
+    func localHistoryItems() -> [[String: Any]] { localHistory }
+
+    /// 清空本机历史（维护用）
+    func clearLocalHistory() {
+        localHistory = []
+        d.removeObject(forKey: "history_local")
+    }
+
+    /// 回滚到某个历史版本。
+    ///
+    /// 回滚本身也走**云端保存**（两台一起写），别的设备下次读取就能看到。
+    /// 版本号继续 +1，不回退。
+    func restore(to data: [String: Any], done: @escaping (Bool, String) -> Void) {
+        guard let (ps, ws) = M.fromJson(data) else {
+            done(false, "这份快照解析失败"); return
+        }
+        persons = ps
+        works = ws
+        M.sortPersons(&persons)
+        /* 回滚是用户主动行为，允许「变小」——把基准降到这份快照的规模，
+           否则紧接着的保存会被覆盖防护当成误操作拦下 */
+        var c = 0
+        for p in ps { c += p.courses.count }
+        knownMembers = ps.count
+        knownCourses = c
+        d.set(ps.count, forKey: "known_members")
+        d.set(c, forKey: "known_courses")
+
+        let payloadBase = M.toJson(persons: ps, works: ws)
+        let ver = bumpVerNo(candidate: Cloud.readVer(data))
+        var payload = payloadBase
+        Cloud.stampVer(&payload, ver)
+        let iso = Cloud.nowIsoText()
+        saveCache(payload)
+
+        let tokCb = cbToken
+        let tokSb = sbToken
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            var ok = false
+            var why = ""
+            if !tokCb.isEmpty {
+                do { try Cloud.cbWrite(payload, token: tokCb, iso: iso); ok = true }
+                catch { why = AppState.translate(error) }
+            }
+            DispatchQueue.main.async {
+                self.cbAt = Cloud.parseIso(iso)
+                self.dataSource = "cb"
+                if ok {
+                    self.snapshot("回滚", ver: ver)
+                    self.enqueue("sb", data: payload, iso: iso)
+                    self.schedulePush(after: 0.2)
+                    self.poke()
+                    done(true, "已回滚到该版本（现在是 v\(ver)），正在同步到另一台…")
+                } else {
+                    self.enqueue("cb", data: payload, iso: iso)
+                    self.enqueue("sb", data: payload, iso: iso)
+                    self.schedulePush(after: 0.2)
+                    self.poke()
+                    done(true, "已在本机回滚（v\(ver)）"
+                         + (why.isEmpty ? "" : "（云端稍后重试：\(why)）"))
+                }
+            }
+        }
+    }
+
     private let d = UserDefaults.standard
 
     /// 「保持登录状态（下次打开免登录）」——不勾时凭证只活在本次会话内存里
@@ -188,6 +321,8 @@ final class AppState: ObservableObject {
         loadCache()
         /* 覆盖防护基准也要先从磁盘捞回来，否则新启动后第一次写没有参照物 */
         restoreCloudSize()
+        /* 数据版本号 + 本机历史也捞回来（首屏「我的」页要显示 vN） */
+        restoreVerNo()
         /* 上次没写成功的那些改动要先捡回来：凭证也在，续期之后就能补上。 */
         loadPending()
         // 顺序不能反：先把登录态续上（access_token 只有 2 小时），再去读云端。
@@ -389,30 +524,41 @@ final class AppState: ObservableObject {
             /* ① 腾讯云先写（快、稳），成了立刻给用户交代 */
             var cbOk = false
             var cbMsg = "腾讯云未登录"
+            /* 版本号：本次保存 = 上一版 +1（只增不减，回滚也一样） */
+            let ver = self.bumpVerNo()
+            var stamped = payload
+            Cloud.stampVer(&stamped, ver)
             if !cbTok.isEmpty {
-                do { try Cloud.cbWrite(payload, token: cbTok, iso: iso); cbOk = true }
+                do { try Cloud.cbWrite(stamped, token: cbTok, iso: iso); cbOk = true }
                 catch { cbMsg = AppState.translate(error) }
             }
 
             DispatchQueue.main.async {
                 self.saving = false
                 if cbOk {
-                    self.saveCache(payload)
-                    self.noteCloudSize(from: payload)
+                    self.saveCache(stamped)
+                    self.noteCloudSize(from: stamped)
                     self.dataSource = "cb"
                     self.dataUpdatedAt = self.clockText(at ?? Date())
                     self.cbAt = at
+                    /* 留一版历史：本机一份（快）+ 腾讯云一份（跨设备） */
+                    self.snapshot("保存", ver: ver)
                     self.poke()
                     /* 跨境那台交给后台，不阻塞、也不弹错 */
-                    self.enqueue("sb", data: payload, iso: iso)
+                    self.enqueue("sb", data: stamped, iso: iso)
                     self.cloudNote = self.buildNote(heal: nil)
-                    self.showToast(head + "（已保存到腾讯云，正在同步 Supabase…）")
+                    self.showToast(head + "（v\(ver) 已保存到腾讯云，正在同步 Supabase…）")
                     self.schedulePush(after: 0.2)          // 正常情况这时就补上了
                     return
                 }
 
                 /* 腾讯云没写上：Supabase 也没登录的话，才是真失败 */
                 if sbTok.isEmpty {
+                    /* 没写上就别白吃一个号 */
+                    if self.curVer == ver {
+                        self.curVer = ver - 1
+                        self.d.set(ver - 1, forKey: "data_version_no")
+                    }
                     revert?()
                     self.poke()
                     self.showToast(cbTok.isEmpty ? "请先登录再保存" : "保存失败：" + cbMsg)
@@ -422,9 +568,9 @@ final class AppState: ObservableObject {
                     return
                 }
                 /* 两台都交给队列去重试，本地先当保存成功（改动不会丢） */
-                self.saveCache(payload)
-                self.enqueue("cb", data: payload, iso: iso)
-                self.enqueue("sb", data: payload, iso: iso)
+                self.saveCache(stamped)
+                self.enqueue("cb", data: stamped, iso: iso)
+                self.enqueue("sb", data: stamped, iso: iso)
                 self.cloudNote = "腾讯云这次没写上（" + cbMsg + "），已在后台自动重试"
                 self.poke()
                 self.showToast(head + "（腾讯云写入失败，已在后台重试）")
@@ -740,6 +886,8 @@ final class AppState: ObservableObject {
                     self.dataSource = pick?.src ?? "local"
                     self.dataUpdatedAt = self.clockText(pick?.at ?? Date())
                     self.saveCache(root)
+                    /* 版本号以云端为准（换设备 / 重装后从云端接上号段） */
+                    self.syncVerNo(from: root)
                     /* 读到云端规模 → 抬高「覆盖防护」基准 */
                     self.noteCloudSize(from: root)
                 } else if self.persons.isEmpty {

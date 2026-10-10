@@ -4,6 +4,7 @@ struct MineView: View {
     @ObservedObject private var app = AppState.shared
     @State private var showLogin = false
     @State private var showLogoutConfirm = false
+    @State private var showHistory = false
 
     var body: some View {
         NavigationView {
@@ -15,6 +16,7 @@ struct MineView: View {
             .navigationTitle("我的")
         }
         .navigationViewStyle(.stack)
+        .sheet(isPresented: $showHistory) { HistorySheet() }
         .sheet(isPresented: $showLogin) { LoginSheet() }
         .alert("退出登录？", isPresented: $showLogoutConfirm) {
             Button("取消", role: .cancel) {}
@@ -95,6 +97,9 @@ struct MineView: View {
             InfoRow(label: "成员数", value: app.persons.isEmpty ? "—" : "\(app.persons.count) 人")
             InfoRow(label: "课程总数", value: app.persons.isEmpty ? "—" : "\(app.totalCourses) 门")
             InfoRow(label: "更新时间", value: app.dataUpdatedAt.isEmpty ? "—" : app.dataUpdatedAt)
+            /* 数据版本号：每次保存 +1，回滚不回退。报问题时说的就是它。 */
+            InfoRow(label: "数据版本",
+                    value: app.curVer > 0 ? "v\(app.curVer)" : "首次保存后开始编号")
 
             /* 两台服务器各自的状态：只同步上一台这件事，得让用户看得见 */
             HStack {
@@ -161,6 +166,22 @@ struct MineView: View {
             /* 不置灰：同步中再点也应给出一句「正在同步，请稍候」，
                置灰后点下去毫无反应，用户只会以为界面卡死了。 */
             .opacity(app.loading ? 0.6 : 1)
+
+            /* 历史版本：每次保存都留一版，误删 / 被覆盖时能退回去（v0.5.6 起） */
+            Button {
+                showHistory = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.caption)
+                    Text("历史版本")
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .liquidGlass(cornerRadius: 12)
+            .buttonStyle(.plain)
 
             if app.loading {
                 VStack(alignment: .leading, spacing: 3) {
@@ -231,7 +252,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.5（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.6（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

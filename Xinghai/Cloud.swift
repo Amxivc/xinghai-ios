@@ -600,6 +600,138 @@ enum Cloud {
                          jsonBody(["id": 1, "data": data, "updated_at": iso]))
     }
 
+    /* ================= 历史快照 + 版本号（v0.5.6 起）=================
+     *
+     * 为什么有它：2026-10-10 出过一次事故 —— 某端读到的是内置的 12 人数据，
+     * 一保存就把它推上云，把 14 人的真数据盖掉了。事后只能靠手工备份还原，
+     * 而且「用户自己看不到、也回不去」。现在每次保存都留一版，随时可回滚。
+     *
+     * 存在哪：腾讯云 timetable_state 表里的**兄弟行**（id = 2...21，共 20 槽）。
+     *   - id = 1 仍是当前主数据，读写逻辑完全不变
+     *   - id >= 2 是历史快照，环状覆盖（满了盖**时间最旧**的那条）
+     *   - 为什么不开新表：PostgREST 不给 DDL，建不了
+     *   - 为什么只在腾讯云：Supabase 那张表有 `timetable_state_id_check` 约束，
+     *     写不进第二行（实测 400），它本来也只做「当前数据的镜像」，不需要历史
+     *
+     * 版本号规则（三端一致）：
+     *   ① 每次保存成功 = 当前 + 1
+     *   ② 回滚也算一次改动，同样 + 1，**绝不回退**
+     *      （回退会让同一个号出现两次，用户就没法指认「我说的 v12 是哪一版」）
+     *   ③ 写在数据的 _meta.ver 里，跟着数据上云 —— 换设备、重装都能接上
+     */
+    static let hisSlots = 20          // 云端保留多少版
+    static let hisBase = 2            // 历史行 id 从 2 开始
+
+    /// 一条历史版本
+    struct His {
+        var id = 0                    // 槽位 id（2..21）
+        var at: Date? = nil           // 快照时间
+        var label = ""                // 操作摘要
+        var members = 0, courses = 0, works = 0
+        var ver = 0                   // 数据版本号
+        var data: [String: Any]? = nil
+    }
+
+    /// 读云端现存的历史槽位（轻量：只要 id 和 updated_at，供分配槽位用）
+    static func cbHisSlots(token: String?) throws -> [(id: Int, at: Date?)] {
+        let url = cbBase + "/v1/rdb/rest/timetable_state?select=id,updated_at&id=gte."
+            + String(hisBase) + "&order=updated_at.desc"
+        let body = try Net.get(url, cbHeaders(token))
+        guard let d = body.data(using: .utf8),
+              let arr = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] else {
+            return []
+        }
+        return arr.compactMap { r in
+            guard let i = r["id"] as? Int else { return nil }
+            return (i, parseIso(r["updated_at"] as? String))
+        }
+    }
+
+    /// 从现存槽位里挑一个：有空槽用空槽，满了盖**时间最旧**的那条。
+    /// ⚠ 必须按时间挑，不能按 id 最小 —— 否则会一直写同一个 id，
+    ///   历史就永远只有一条（安卓 v3.19 第一次实现踩过这个坑）。
+    static func pickHisSlot(_ rows: [(id: Int, at: Date?)]) -> Int {
+        var used = Set<Int>()
+        for r in rows where r.id >= hisBase && r.id < hisBase + hisSlots { used.insert(r.id) }
+        for i in 0..<hisSlots where !used.contains(hisBase + i) { return hisBase + i }
+        var oldest = hisBase
+        var oldestAt = Date.distantFuture
+        for r in rows where r.id >= hisBase && r.id < hisBase + hisSlots {
+            let t = r.at ?? Date.distantFuture
+            if t < oldestAt { oldestAt = t; oldest = r.id }
+        }
+        return oldest
+    }
+
+    /// 写一条历史快照到指定槽位
+    static func cbWriteHistory(slot: Int, data: [String: Any], iso: String,
+                               token: String?) throws {
+        var h = cbHeaders(token)
+        h["Prefer"] = "resolution=merge-duplicates,return=minimal"
+        _ = try Net.post(cbBase + "/v1/rdb/rest/timetable_state", h,
+                         jsonBody(["id": slot, "data": data, "updated_at": iso]))
+    }
+
+    /// 读全部历史快照（含 data），按时间倒序
+    static func cbReadHistory(token: String?) throws -> [His] {
+        let url = cbBase + "/v1/rdb/rest/timetable_state?select=id,data,updated_at&id=gte."
+            + String(hisBase) + "&order=updated_at.desc"
+        let body = try Net.get(url, cbHeaders(token))
+        guard let d = body.data(using: .utf8),
+              let arr = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] else {
+            return []
+        }
+        var out: [His] = []
+        for r in arr {
+            guard let data = dataOf(r) else { continue }
+            var h = His()
+            h.id = r["id"] as? Int ?? 0
+            h.at = parseIso(r["updated_at"] as? String)
+            h.data = data
+            if let meta = data["_meta"] as? [String: Any] {
+                h.label   = meta["label"] as? String ?? ""
+                h.members = meta["members"] as? Int ?? 0
+                h.courses = meta["courses"] as? Int ?? 0
+                h.works   = meta["works"] as? Int ?? 0
+                h.ver     = meta["ver"] as? Int ?? 0
+            }
+            out.append(h)
+        }
+        return out
+    }
+
+    /// 把当前数据包成一份历史快照（附 _meta 摘要 + 版本号）
+    static func buildHistoryPayload(_ data: [String: Any], label: String,
+                                    members: Int, courses: Int, works: Int,
+                                    ver: Int) -> [String: Any] {
+        var root: [String: Any] = [:]
+        root["timetable"] = data["timetable"] as? [[String: Any]] ?? []
+        root["workCalendar"] = data["workCalendar"] as? [[String: Any]] ?? []
+        root["_meta"] = ["label": label, "members": members,
+                         "courses": courses, "works": works, "ver": ver]
+        return root
+    }
+
+    /// 从数据包读版本号（没有 / 旧数据 → 0）
+    static func readVer(_ data: [String: Any]?) -> Int {
+        guard let d = data, let meta = d["_meta"] as? [String: Any] else { return 0 }
+        return meta["ver"] as? Int ?? 0
+    }
+
+    /// 把版本号写进数据包（原地改）
+    @discardableResult
+    static func stampVer(_ data: inout [String: Any], _ ver: Int) -> [String: Any] {
+        var meta = (data["_meta"] as? [String: Any]) ?? [:]
+        meta["ver"] = ver
+        data["_meta"] = meta
+        return data
+    }
+
+    /// 历史里最大的版本号（本机首次编号时「接上」云端已到几号）
+    static func maxVer(_ his: [His]) -> Int {
+        his.reduce(0) { max($0, $1.ver) }
+    }
+
     /* ================= 登录 ================= */
 
     static func cbSignIn(username: String, password: String) throws -> Auth {

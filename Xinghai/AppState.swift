@@ -847,19 +847,24 @@ final class AppState: ObservableObject {
             if let c = cbSnap, let s = sbSnap, !Cloud.sameVersion(c.at, s.at), let p = pick {
                 let target = (p.src == "cb") ? "sb" : "cb"
                 let tok = (target == "cb") ? cbTok : sbTok
-                if !tok.isEmpty {
+                let targetLabel = (target == "cb") ? "腾讯云" : "Supabase"
+                /* 覆盖防护（第五道闸门）：补写同样要过校验。
+                   补写虽然发生在「刚用云端数据覆盖过内存」之后、规模理应不会缩水，
+                   但万一以后调用顺序被改动，这里就是唯一的兜底 —— 绝不让规模异常
+                   的数据借补写通道溜进云端。 */
+                if let why = self.blockReason(p.data) {
+                    heal = targetLabel + "补写已跳过（" + why + "）"
+                } else if !tok.isEmpty {
                     healTarget = target
-                    let targetLabel = (target == "cb") ? "腾讯云" : "Supabase"
                     DispatchQueue.main.async { self.syncStage = "正在把最新数据补写到" + targetLabel + "…" }
                     let iso = Cloud.iso(from: p.at)
                     do {
                         if target == "cb" { try Cloud.cbWrite(p.data, token: tok, iso: iso) }
                         else { try Cloud.sbWrite(p.data, token: tok, iso: iso) }
                         healedAt = Cloud.parseIso(iso)
-                        heal = "已把最新数据补写到" + (target == "cb" ? "腾讯云" : "Supabase")
+                        heal = "已把最新数据补写到" + targetLabel
                     } catch {
-                        heal = (target == "cb" ? "腾讯云" : "Supabase")
-                            + "补写失败：" + AppState.translate(error)
+                        heal = targetLabel + "补写失败：" + AppState.translate(error)
                     }
                 }
             }

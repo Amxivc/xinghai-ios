@@ -67,6 +67,10 @@ final class AppState: ObservableObject {
     /// 需要提醒用户的一致性提示（空串 = 没问题）
     @Published var cloudNote = ""
 
+    /// 覆盖防护基准：已知的云端规模（成员数 / 课程数），只增不减
+    private var knownMembers = 0
+    private var knownCourses = 0
+
     private let d = UserDefaults.standard
 
     /// 「保持登录状态（下次打开免登录）」——不勾时凭证只活在本次会话内存里
@@ -182,6 +186,8 @@ final class AppState: ObservableObject {
             }
         }
         loadCache()
+        /* 覆盖防护基准也要先从磁盘捞回来，否则新启动后第一次写没有参照物 */
+        restoreCloudSize()
         /* 上次没写成功的那些改动要先捡回来：凭证也在，续期之后就能补上。 */
         loadPending()
         // 顺序不能反：先把登录态续上（access_token 只有 2 小时），再去读云端。
@@ -369,6 +375,17 @@ final class AppState: ObservableObject {
             let at = Cloud.parseIso(iso)
             let head = okMsg.isEmpty ? "已保存" : okMsg
 
+            /* 覆盖防护：本地数据明显缩水时拒绝写云端（2026-10-10 事故后加的） */
+            if let why = self.blockReason(payload) {
+                DispatchQueue.main.async {
+                    self.saving = false
+                    revert?()
+                    self.poke()
+                    self.showToast(why)
+                }
+                return
+            }
+
             /* ① 腾讯云先写（快、稳），成了立刻给用户交代 */
             var cbOk = false
             var cbMsg = "腾讯云未登录"
@@ -381,6 +398,7 @@ final class AppState: ObservableObject {
                 self.saving = false
                 if cbOk {
                     self.saveCache(payload)
+                    self.noteCloudSize(from: payload)
                     self.dataSource = "cb"
                     self.dataUpdatedAt = self.clockText(at ?? Date())
                     self.cbAt = at
@@ -722,6 +740,8 @@ final class AppState: ObservableObject {
                     self.dataSource = pick?.src ?? "local"
                     self.dataUpdatedAt = self.clockText(pick?.at ?? Date())
                     self.saveCache(root)
+                    /* 读到云端规模 → 抬高「覆盖防护」基准 */
+                    self.noteCloudSize(from: root)
                 } else if self.persons.isEmpty {
                     self.banner = "云端读取失败（腾讯云与 Supabase 均未成功），且本地无缓存"
                     parsed = false
@@ -797,6 +817,55 @@ final class AppState: ObservableObject {
               let data = try? JSONSerialization.data(withJSONObject: root,
                                                      options: [.prettyPrinted]) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+
+    /* ================= 覆盖防护 =================
+     *
+     * 2026-10-10 事故：某端读不到云端，本地只剩内置演示数据（12 人），
+     * 一次保存就把这份「缩水快照」双写覆盖了两台，丢掉 2 名成员、43 门课、22 条记录。
+     * 这里按「成员数 + 课程数两个维度同时缩水」判定，拒绝把异常小的数据推上云。
+     */
+
+    /// 读到/写过云端时抬高基准（只增不减，避免一次错误写入把基准打低）
+    func noteCloudSize(members m: Int, courses c: Int) {
+        if m > knownMembers { knownMembers = m; d.set(m, forKey: "known_members") }
+        if c > knownCourses { knownCourses = c; d.set(c, forKey: "known_courses") }
+    }
+
+    /// 从一份 payload 记下规模（写成功后调）
+    func noteCloudSize(from payload: [String: Any]) {
+        let tt = payload["timetable"] as? [[String: Any]] ?? []
+        var c = 0
+        for p in tt { c += (p["courses"] as? [[String: Any]] ?? []).count }
+        noteCloudSize(members: tt.count, courses: c)
+    }
+
+    /// 从 UserDefaults 恢复基准（启动时调）
+    func restoreCloudSize() {
+        knownMembers = d.integer(forKey: "known_members")
+        knownCourses = d.integer(forKey: "known_courses")
+    }
+
+    /// 这份数据能不能写上去？nil = 可以写，否则是拒绝原因（给用户看的人话）
+    func blockReason(_ payload: [String: Any]) -> String? {
+        let tt = payload["timetable"] as? [[String: Any]] ?? []
+        var m = tt.count
+        var c = 0
+        for p in tt { c += (p["courses"] as? [[String: Any]] ?? []).count }
+        /* 空数据绝不允许推上去 */
+        if m == 0 { return "本地没有任何成员数据，已阻止写入云端以免清空服务器" }
+        let baseM = knownMembers > 0 ? knownMembers : d.integer(forKey: "known_members")
+        let baseC = knownCourses > 0 ? knownCourses : d.integer(forKey: "known_courses")
+        if baseM >= 4 && m * 2 < baseM {
+            return "本地只有 \(m) 位成员，远少于云端记录的 \(baseM) 位，疑似数据异常，"
+                 + "已阻止写入以免覆盖服务器（请先重新同步）"
+        }
+        /* 交叉相乘比较，避开整数除法截断（14*9/10 会算成 12 而不是 12.6） */
+        if baseM >= 4 && baseC >= 20 && m * 10 < baseM * 9 && c * 10 < baseC * 9 {
+            return "本地成员 \(m)/\(baseM)、课程 \(c)/\(baseC) 都比云端少，疑似数据异常，"
+                 + "已阻止写入以免覆盖服务器（请先重新同步）"
+        }
+        return nil
     }
 
     /* ================= 登录 / 退出 ================= */

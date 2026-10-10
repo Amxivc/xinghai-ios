@@ -556,7 +556,7 @@ enum Cloud {
         do {
             return try pickSnap(Net.get(url, cbHeaders(nil)), "cb")
         } catch {
-            if let t = fallbackToken, !t.isEmpty, isAuthFailure(error) {
+            if let t = fallbackToken, !t.isEmpty, CloudError.isAuthFailure(error) {
                 return try pickSnap(Net.get(url, cbHeaders(t)), "cb")
             }
             throw error
@@ -568,7 +568,7 @@ enum Cloud {
         do {
             return try pickSnap(Net.get(url, sbHeaders(nil)), "sb")
         } catch {
-            if let t = fallbackToken, !t.isEmpty, isAuthFailure(error) {
+            if let t = fallbackToken, !t.isEmpty, CloudError.isAuthFailure(error) {
                 return try pickSnap(Net.get(url, sbHeaders(t)), "sb")
             }
             throw error

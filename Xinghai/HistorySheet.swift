@@ -32,43 +32,13 @@ struct HistorySheet: View {
 
     var body: some View {
         NavigationView {
-            Group {
-                if loading {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("正在读取…").font(.subheadline).foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if items.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.largeTitle).foregroundColor(.secondary)
-                        Text("还没有历史版本")
-                            .font(.headline)
-                        Text("升级到本版后，之后每次保存都会自动留一版。")
-                            .font(.subheadline).foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 30)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        Section {
-                            ForEach(Array(items.enumerated()), id: \.element.id) { idx, it in
-                                row(it, isCur: idx == curIdx)
-                            }
-                        } header: {
-                            Text("共 \(items.count) 版，点任意一版可回滚　·　当前 v\(app.curVer)")
-                        }
+            content
+                .navigationTitle("历史版本")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("关闭") { dismiss() }
                     }
                 }
-            }
-            .navigationTitle("历史版本")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { dismiss() }
-                }
-            }
         }
         .navigationViewStyle(.stack)
         .onAppear { reload() }
@@ -76,53 +46,132 @@ struct HistorySheet: View {
             Button("取消", role: .cancel) { pending = nil }
             Button("回滚到这一版", role: .destructive) { doRestore() }
         } message: {
-            if let p = pending {
-                Text((p.ver > 0 ? "v\(p.ver)　" : "") + timeText(p.at) + "　" + p.label + "\n"
-                     + "\(p.members) 位成员 · \(p.courses) 门课程 · \(p.works) 条记录\n"
-                     + "当前数据（v\(app.curVer)）会被这一版替换。")
+            Text(alertMessage)
+        }
+    }
+
+    /// 列表 / 空态 / 加载态三选一 —— 拆出来避免一整个表达式太重
+    @ViewBuilder
+    private var content: some View {
+        if loading {
+            loadingView
+        } else if items.isEmpty {
+            emptyView
+        } else {
+            listView
+        }
+    }
+
+    private var loadingView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("正在读取…")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyView: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.largeTitle)
+                .foregroundColor(.secondary)
+            Text("还没有历史版本")
+                .font(.headline)
+            Text("升级到本版后，之后每次保存都会自动留一版。")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 30)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var listView: some View {
+        List {
+            Section {
+                ForEach(Array(items.enumerated()), id: \.element.id) { idx, it in
+                    row(it, isCur: idx == curIdx)
+                }
+            } header: {
+                Text(headerText)
             }
         }
     }
 
+    private var headerText: String {
+        "共 \(items.count) 版，点任意一版可回滚　·　当前 v\(app.curVer)"
+    }
+
+    private var alertMessage: String {
+        guard let p = pending else { return "" }
+        let verPart = p.ver > 0 ? "v\(p.ver)　" : ""
+        let line1 = verPart + timeText(p.at) + "　" + p.label
+        let line2 = "\(p.members) 位成员 · \(p.courses) 门课程 · \(p.works) 条记录"
+        let line3 = "当前数据（v\(app.curVer)）会被这一版替换。"
+        return line1 + "\n" + line2 + "\n" + line3
+    }
+
     private func row(_ it: Item, isCur: Bool) -> some View {
         Button {
-            if isCur {
-                app.showToast("这一版就是当前数据" + (it.ver > 0 ? "（v\(it.ver)）" : ""))
-                return
-            }
-            pending = it
-            confirmRestore = true
+            tap(it, isCur: isCur)
         } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    if it.ver > 0 {
-                        Text("v\(it.ver)")
-                            .font(.caption.weight(.bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 7).padding(.vertical, 2)
-                            .background(Color.accentColor)
-                            .cornerRadius(6)
-                    }
-                    Text(timeText(it.at))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
-                    Spacer()
-                    Text(isCur ? "当前" : it.label)
-                        .font(.caption2)
-                        .foregroundColor(.accentColor)
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.12))
-                        .cornerRadius(6)
-                }
-                Text("\(it.members) 位成员 · \(it.courses) 门课程 · \(it.works) 条记录　·　\(it.origin)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
+            rowLabel(it, isCur: isCur)
         }
         .buttonStyle(.plain)
         .listRowBackground(isCur ? Color.accentColor.opacity(0.07) : Color.clear)
+    }
+
+    private func tap(_ it: Item, isCur: Bool) {
+        if isCur {
+            let suffix = it.ver > 0 ? "（v\(it.ver)）" : ""
+            app.showToast("这一版就是当前数据" + suffix)
+            return
+        }
+        pending = it
+        confirmRestore = true
+    }
+
+    private func rowLabel(_ it: Item, isCur: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                verBadge(it.ver)
+                Text(timeText(it.at))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.primary)
+                Spacer()
+                Text(isCur ? "当前" : it.label)
+                    .font(.caption2)
+                    .foregroundColor(.accentColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.12))
+                    .cornerRadius(6)
+            }
+            Text(statText(it))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func verBadge(_ ver: Int) -> some View {
+        if ver > 0 {
+            Text("v\(ver)")
+                .font(.caption.weight(.bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Color.accentColor)
+                .cornerRadius(6)
+        }
+    }
+
+    private func statText(_ it: Item) -> String {
+        "\(it.members) 位成员 · \(it.courses) 门课程 · \(it.works) 条记录　·　\(it.origin)"
     }
 
     /// 哪一条才是「当前这份数据」？按时间戳最接近 app.cbAt 的那条（1.5s 容差）。

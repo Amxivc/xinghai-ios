@@ -667,7 +667,7 @@ final class AppState: ObservableObject {
             DispatchQueue.global(qos: .userInitiated).async {
                 var s: Cloud.Snap? = nil
                 var e = ""
-                do { s = try Cloud.cbReadSnap() } catch { e = AppState.translate(error) }
+                do { s = try Cloud.cbReadSnap(fallbackToken: cbTok) } catch { e = AppState.translate(error) }
                 box.lock(); cbSnap = s; cbErr = e; box.unlock()
                 grp.leave()
             }
@@ -675,7 +675,7 @@ final class AppState: ObservableObject {
             DispatchQueue.global(qos: .userInitiated).async {
                 var s: Cloud.Snap? = nil
                 var e = ""
-                do { s = try Cloud.sbReadSnap() } catch { e = AppState.translate(error) }
+                do { s = try Cloud.sbReadSnap(fallbackToken: sbTok) } catch { e = AppState.translate(error) }
                 box.lock(); sbSnap = s; sbErr = e; box.unlock()
                 grp.leave()
             }

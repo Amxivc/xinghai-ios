@@ -546,15 +546,33 @@ enum Cloud {
                              sbHeaders(nil)))
     }
 
-    /// 带时间戳的读取：两台都读，比出谁最新
-    static func cbReadSnap() throws -> Snap? {
-        try pickSnap(Net.get(cbBase + "/v1/rdb/rest/timetable_state?select=data,updated_at&id=eq.1",
-                             cbHeaders(nil)), "cb")
+    /// 带时间戳的读取：两台都读，比出谁最新。
+    ///
+    /// `fallbackToken`（v0.5.4 起）：匿名读失败且是认证类错误时，拿登录令牌再读一次。
+    /// 读云端历来只带 apikey（匿名读），万一服务端收紧匿名读，明明登着也会读到空 ——
+    /// 2026-10-10 事故就是这个形态（读不到 → 只剩内置快照 → 一保存就覆盖云端）。
+    static func cbReadSnap(fallbackToken: String? = nil) throws -> Snap? {
+        let url = cbBase + "/v1/rdb/rest/timetable_state?select=data,updated_at&id=eq.1"
+        do {
+            return try pickSnap(Net.get(url, cbHeaders(nil)), "cb")
+        } catch {
+            if let t = fallbackToken, !t.isEmpty, isAuthFailure(error) {
+                return try pickSnap(Net.get(url, cbHeaders(t)), "cb")
+            }
+            throw error
+        }
     }
 
-    static func sbReadSnap() throws -> Snap? {
-        try pickSnap(Net.get(sbUrl + "/rest/v1/timetable_state?select=data,updated_at&id=eq.1",
-                             sbHeaders(nil)), "sb")
+    static func sbReadSnap(fallbackToken: String? = nil) throws -> Snap? {
+        let url = sbUrl + "/rest/v1/timetable_state?select=data,updated_at&id=eq.1"
+        do {
+            return try pickSnap(Net.get(url, sbHeaders(nil)), "sb")
+        } catch {
+            if let t = fallbackToken, !t.isEmpty, isAuthFailure(error) {
+                return try pickSnap(Net.get(url, sbHeaders(t)), "sb")
+            }
+            throw error
+        }
     }
 
     /* ================= 写入 ================= */

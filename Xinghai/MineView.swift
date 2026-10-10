@@ -22,6 +22,11 @@ struct MineView: View {
         } message: {
             Text("退出后将无法保存修改到云端")
         }
+        .onAppear {
+            /* 进「我的」页 = 用户想看状态了。顺手体检一次（内部有 60 秒节流），
+               掉线的话当场自动重连，状态行也会立刻变成「已自动重连」。 */
+            app.checkSessions()
+        }
     }
 
     /* ================= 账号卡 ================= */
@@ -184,10 +189,27 @@ struct MineView: View {
     /// 单台服务器的同步状态：未登录 / 取不到 / 最新 / 落后（带时间）
     /// 单台服务器：数据新旧 + 能不能写（登录）分开说。
     /// 读数据不需要登录，所以未登录的那台完全可能是较新的那份 —— 必须标出来。
+    /// 另外把「登录态自检」的结论也标出来：用户反馈过「有时候随机掉其中一个」，
+    /// 要让他看得出「正在自动重连（等着就行）」还是「凭证过期（得手动重登）」。
     private func serverState(cb: Bool) -> String {
         let logged = cb ? app.isCbLogged : app.isSbLogged
         let got = cb ? app.cbGot : app.sbGot
         let at = cb ? app.cbAt : app.sbAt
+
+        /* 自检结论优先：比「取不到」信息量大得多 */
+        let needLogin = cb ? app.cbNeedLogin : app.sbNeedLogin
+        let offline = cb ? app.cbOffline : app.sbOffline
+        let recovered = cb ? app.cbRecovered : app.sbRecovered
+        if needLogin && !logged {
+            return "登录已失效，需重新登录"
+        }
+        if offline && !got {
+            return "已断开，正在后台自动重连…"
+        }
+        if recovered && got, let at = at {
+            return "已自动重连（" + app.clockText(at) + "）"
+        }
+
         if !got {
             /* 取不到时把原因一并说出来：以前只显示「取不到」，看不出是断网、
                超时、连接被重置还是 401，用户和我们都没法定位。 */
@@ -209,7 +231,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.2（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.3（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

@@ -37,6 +37,17 @@ final class AppState: ObservableObject {
     @Published var sbUser: String? = nil
     @Published var sbAdmin = false
 
+    /* ---- 登录态自检结论（用户反馈「有时候随机掉其中一个」） ---- */
+    /// 该端凭证真的失效了，必须用户手动重登
+    @Published var cbNeedLogin = false
+    @Published var sbNeedLogin = false
+    /// 该端只是连不上（凭证已保留，后台会重试）
+    @Published var cbOffline = false
+    @Published var sbOffline = false
+    /// 该端刚被自动续上（用来在状态行显示「已自动重连」）
+    @Published var cbRecovered = false
+    @Published var sbRecovered = false
+
     @Published var saving = false
     @Published var toast: String? = nil
     private var toastWork: DispatchWorkItem? = nil
@@ -387,6 +398,9 @@ final class AppState: ObservableObject {
                     revert?()
                     self.poke()
                     self.showToast(cbTok.isEmpty ? "请先登录再保存" : "保存失败：" + cbMsg)
+                    /* 保存失败最常见的两个原因就是「某一端 token 过期」或「链路抖动」。
+                       立刻体检一次：能自动续上就续，需要重登就明说，别让用户干瞪眼。 */
+                    self.checkSessions(force: true)
                     return
                 }
                 /* 两台都交给队列去重试，本地先当保存成功（改动不会丢） */
@@ -398,6 +412,169 @@ final class AppState: ObservableObject {
                 self.showToast(head + "（腾讯云写入失败，已在后台重试）")
                 self.schedulePush(after: 0.2)
             }
+        }
+    }
+
+    /* ================= 登录态自检 + 后台自动重连 ================= */
+
+    /// 自检结论
+    struct Health {
+        var cbOk = false, sbOk = false
+        var cbNeedLogin = false, sbNeedLogin = false
+        var cbOffline = false, sbOffline = false
+        var cbRecovered = false, sbRecovered = false
+        /// 汇总一句话，可直接当 toast（空串 = 一切正常，不用打扰）
+        var note = ""
+    }
+
+    /// 上次自检时间 —— 非强制调用时用来节流
+    private var lastCheck: Date = .distantPast
+    /// 节流窗口：60 秒内不重复自检（force 可绕过）
+    private let checkGap: TimeInterval = 60
+    private var checking = false
+    /// 自检途中有别的请求想跑 → 记下来，结束后补跑一次
+    private var checkAgain = false
+
+    /// 顺手体检一次登录态。任何时机都能调（启动 / 回前台 / 同步 / 保存失败 / 切到「我的」）。
+    ///
+    /// **为什么要它**：用户反馈「安卓端有时候腾讯云和 supabase 会随机掉其中一个」。
+    /// 根因是 access_token 只有 2 小时 —— 过期后服务端一律 401，而旧实现只在「启动时」
+    /// 续一次，运行期间掉线就一直掉着；`forget()` 一旦执行凭证就没了，再也回不来。
+    /// 现在按端分别「探测 → 用 refresh_token 续 → 网络问题就保留凭证排队重试」。
+    /// - Parameter force: 忽略节流（登录后 / 用户手动同步 / 保存失败时用）
+    func checkSessions(force: Bool = false, done: ((Health) -> Void)? = nil) {
+        if !isLoggedIn {
+            done?(Health())
+            return
+        }
+        if !force && Date().timeIntervalSince(lastCheck) < checkGap {
+            done?(Health())
+            return
+        }
+        if checking {                       // 上一轮还在跑，等它结束后补跑一次
+            checkAgain = true
+            done?(Health())
+            return
+        }
+        checking = true
+        lastCheck = Date()
+        let cbTokAtStart = cbUser
+        let sbTokAtStart = sbUser
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            var h = Health()
+            var needLogin: [String] = []
+            var offline: [String] = []
+            var recovered: [String] = []
+
+            /* ---- 腾讯云 ---- */
+            if cbTokAtStart != nil {
+                let (ok, authFail) = self.probeCb()
+                if ok { h.cbOk = true }
+                else if self.renewOne("cb") { h.cbOk = true; h.cbRecovered = true; recovered.append("腾讯云") }
+                else if authFail { h.cbNeedLogin = true; self.forget("cb", "腾讯云"); needLogin.append("腾讯云") }
+                else { h.cbOffline = true; offline.append("腾讯云") }
+            }
+            /* ---- Supabase ---- */
+            if sbTokAtStart != nil {
+                let (ok, authFail) = self.probeSb()
+                if ok { h.sbOk = true }
+                else if self.renewOne("sb") { h.sbOk = true; h.sbRecovered = true; recovered.append("Supabase") }
+                else if authFail { h.sbNeedLogin = true; self.forget("sb", "Supabase"); needLogin.append("Supabase") }
+                else { h.sbOffline = true; offline.append("Supabase") }
+            }
+
+            h.note = AppState.buildHealthNote(needLogin: needLogin, offline: offline, recovered: recovered)
+
+            DispatchQueue.main.async {
+                self.cbNeedLogin = h.cbNeedLogin; self.sbNeedLogin = h.sbNeedLogin
+                self.cbOffline = h.cbOffline; self.sbOffline = h.sbOffline
+                /* 「已自动重连」标记只保留到下一次自检：否则会一直挂在状态行上 */
+                self.cbRecovered = h.cbRecovered; self.sbRecovered = h.sbRecovered
+                self.checking = false
+                self.poke()
+                if !h.note.isEmpty { self.showToast(h.note) }
+                done?(h)
+                /* 自检之后把还欠的补写一次（那台连上了就能收尾） */
+                self.flushPending()
+                if self.checkAgain {
+                    self.checkAgain = false
+                    self.checkSessions(force: true, done: nil)
+                }
+            }
+        }
+    }
+
+    /// 拼提示语。三种情形说法必须不同，否则用户分不清「等一等」还是「得自己动手」。
+    private static func buildHealthNote(needLogin: [String], offline: [String],
+                                        recovered: [String]) -> String {
+        if !needLogin.isEmpty {
+            return "⚠ " + needLogin.joined(separator: " / ") + "登录已失效，请到「我的」页重新登录"
+        }
+        if !recovered.isEmpty {
+            var s = "已自动重连：" + recovered.joined(separator: " / ")
+            if !offline.isEmpty {
+                s += "（" + offline.joined(separator: " / ") + "仍未连上，继续重试）"
+            }
+            return s
+        }
+        if !offline.isEmpty {
+            return offline.joined(separator: " / ") + "暂时连不上（凭证已保留，正在后台重试）"
+        }
+        return ""
+    }
+
+    /// 探腾讯云：用当前 token 读一次 admins 表（很轻），能读通说明会话可用。
+    /// 返回值第二项 = 是不是「凭证真失效」（而不是网络问题）。
+    private func probeCb() -> (Bool, Bool) {
+        let tok = cbToken
+        if tok.isEmpty { return (false, false) }
+        do {
+            let uid = Cloud.uidFromJwt(tok)
+            let admin = try Cloud.cbIsAdmin(uid: uid, token: tok)
+            DispatchQueue.main.async { self.cbAdmin = admin }
+            return (true, false)
+        } catch {
+            return (false, CloudError.isAuthFailure(error))
+        }
+    }
+
+    private func probeSb() -> (Bool, Bool) {
+        let tok = sbToken
+        if tok.isEmpty { return (false, false) }
+        do {
+            let uid = Cloud.uidFromJwt(tok)
+            let admin = try Cloud.sbIsAdmin(uid: uid, token: tok)
+            DispatchQueue.main.async { self.sbAdmin = admin }
+            return (true, false)
+        } catch {
+            return (false, CloudError.isAuthFailure(error))
+        }
+    }
+
+    /// 用 refresh_token 换新的 access_token。成功返回 true（并把新 token 存回）。
+    private func renewOne(_ who: String) -> Bool {
+        if who == "cb" {
+            let rf = cbRefresh
+            if rf.isEmpty { return false }
+            guard let a = try? Cloud.cbRefresh(rf) else { return false }
+            cbToken = a.token
+            if !a.refresh.isEmpty { cbRefresh = a.refresh }
+            let admin = (try? Cloud.cbIsAdmin(uid: a.uid, token: a.token)) ?? false
+            setMeta("cb_admin", admin)
+            DispatchQueue.main.async { self.cbAdmin = admin }
+            return true
+        } else {
+            let rf = sbRefresh
+            if rf.isEmpty { return false }
+            guard let a = try? Cloud.sbRefresh(rf) else { return false }
+            sbToken = a.token
+            if !a.refresh.isEmpty { sbRefresh = a.refresh }
+            let admin = (try? Cloud.sbIsAdmin(uid: a.uid, token: a.token)) ?? false
+            setMeta("sb_admin", admin)
+            DispatchQueue.main.async { self.sbAdmin = admin }
+            return true
         }
     }
 
@@ -415,84 +592,7 @@ final class AppState: ObservableObject {
     /// 换不动（refresh_token 也过期了）就老实把该端登出并提示，绝不假装还登录着。
     /// 结束时一定回调 `done`，由它去拉数据 —— 这样「续期 → 读取」的顺序是有保证的。
     func renewSession(done: (() -> Void)? = nil) {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else { return }
-            var expired: [String] = []
-            var offline: [String] = []     // 只是这次没续上（网络问题），凭证留着
-            var renewed = false
-
-            if self.cbUser != nil {
-                let rf = self.cbRefresh
-                if rf.isEmpty {
-                    self.forget("cb", "腾讯云")
-                    expired.append("腾讯云")
-                } else {
-                    do {
-                        let a = try Cloud.cbRefresh(rf)
-                        self.cbToken = a.token
-                        if !a.refresh.isEmpty { self.cbRefresh = a.refresh }
-                        let admin = (try? Cloud.cbIsAdmin(uid: a.uid, token: a.token)) ?? false
-                        self.setMeta("cb_admin", admin)
-                        DispatchQueue.main.async { self.cbAdmin = admin }
-                        renewed = true
-                    } catch {
-                        /* 网络问题别清登录态：清了就再也补不回来（用户那边重登不上） */
-                        if CloudError.isAuthFailure(error) {
-                            self.forget("cb", "腾讯云")
-                            expired.append("腾讯云")
-                        } else {
-                            offline.append("腾讯云")
-                        }
-                    }
-                }
-            }
-
-            if self.sbUser != nil {
-                let rf = self.sbRefresh
-                if rf.isEmpty {
-                    self.forget("sb", "Supabase")
-                    expired.append("Supabase")
-                } else {
-                    do {
-                        let a = try Cloud.sbRefresh(rf)
-                        self.sbToken = a.token
-                        if !a.refresh.isEmpty { self.sbRefresh = a.refresh }
-                        let admin = (try? Cloud.sbIsAdmin(uid: a.uid, token: a.token)) ?? false
-                        self.setMeta("sb_admin", admin)
-                        DispatchQueue.main.async { self.sbAdmin = admin }
-                        renewed = true
-                    } catch {
-                        /* 网络问题别清登录态 —— 见 CloudError.isAuthFailure 的说明 */
-                        if CloudError.isAuthFailure(error) {
-                            self.forget("sb", "Supabase")
-                            expired.append("Supabase")
-                        } else {
-                            offline.append("Supabase")
-                        }
-                    }
-                }
-            }
-
-            if !expired.isEmpty {
-                DispatchQueue.main.async {
-                    self.showToast("⚠ " + expired.joined(separator: " / ")
-                        + "登录已过期，请重新登录；否则改动只会写进另一台")
-                }
-            }
-            if !offline.isEmpty {
-                /* 只是没连上，凭证还在。不说清楚的话，用户会以为又掉登录了。 */
-                DispatchQueue.main.async {
-                    self.pendingNote = offline.joined(separator: " / ")
-                        + "这次没连上（凭证已保留，稍后自动重试）"
-                }
-            }
-            if renewed { DispatchQueue.main.async { self.poke() } }
-            DispatchQueue.main.async {
-                done?()
-                // 续期之后立刻把还没补上的写出去（跨境那台连上了就能收尾）
-                self.flushPending()
-            }
-        }
+        checkSessions(force: true) { _ in done?() }
     }
 
     /// 某一端彻底失效：清掉它的凭证，让界面老实显示「未登录」
@@ -636,6 +736,12 @@ final class AppState: ObservableObject {
                     self.load()
                     return
                 }
+
+                /* 读完顺手体检登录态：某端 token 过期在这里就能被发现并自动续上，
+                   不必等到用户下次保存失败才暴露。
+                   用非 force：刚读完两台、token 是否有效其实已经能从结果看出来，
+                   再强制探一次纯属重复网络请求（有 60 秒节流兜底）。 */
+                self.checkSessions()
 
                 /* 结束一定要有回话。以前同步完一声不吭，用户不知道好了没有。 */
                 let both = self.cbGot && self.sbGot

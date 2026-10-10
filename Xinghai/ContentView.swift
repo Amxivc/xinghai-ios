@@ -28,11 +28,16 @@ struct ContentView: View {
         .overlay(alignment: .top) { toastView }
         .animation(.easeInOut(duration: 0.25), value: app.toast)
         .onChange(of: scenePhase) { phase in
-            /* 回到前台：网络环境可能已经变了（比如从 5G 换到 Wi-Fi），把「还没补写上
-               的那台」再试一次，静默进行、不打扰用户。
-               这里故意【不】重续登录态 —— refresh_token 是一次性轮换的，频繁续期反而
-               会互相踩（后一次拿到 invalid_grant 反而会把登录态清掉）。 */
-            if phase == .active { app.flushPending() }
+            /* 回到前台做两件事：
+               ① 把「还没补写上的那台」再试一次（静默）；
+               ② 体检登录态 —— 用户反馈过「有时候随机掉其中一个」，掉的那一刻可能
+                  就发生在后台期间，只等启动时那一次续期根本兜不住。
+                  checkSessions 内部有 60 秒节流 + 互斥，且只有在「成功换到新 token」
+                  时才把新 refresh_token 存回，所以不会出现「频繁续期互相踩」。 */
+            if phase == .active {
+                app.flushPending()
+                app.checkSessions()
+            }
         }
     }
 

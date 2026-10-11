@@ -221,7 +221,10 @@ struct MineView: View {
         let needLogin = cb ? app.cbNeedLogin : app.sbNeedLogin
         let offline = cb ? app.cbOffline : app.sbOffline
         let recovered = cb ? app.cbRecovered : app.sbRecovered
-        if needLogin && !logged {
+        /* 凭证已被清掉（需重登）时 logged 已是 false，所以这两个判断要按标记来。
+           ⚠ 但「掉登冷静期」里凭证还留在盘上（logged 仍为 true），
+             此时也必须把「需重新登录」显示出来 —— 所以不能加 !logged 限定。 */
+        if needLogin {
             return "登录已失效，需重新登录"
         }
         if offline && !got {
@@ -252,7 +255,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.7（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.8（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

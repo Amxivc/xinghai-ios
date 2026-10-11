@@ -635,17 +635,28 @@ final class AppState: ObservableObject {
             /* ---- 腾讯云 ---- */
             if cbTokAtStart != nil {
                 let (ok, authFail) = self.probeCb()
-                if ok { h.cbOk = true }
-                else if self.renewOne("cb") { h.cbOk = true; h.cbRecovered = true; recovered.append("腾讯云") }
-                else if authFail { h.cbNeedLogin = true; self.forget("cb", "腾讯云"); needLogin.append("腾讯云") }
+                if ok { h.cbOk = true; self.cbAuthBlip = false }
+                else if self.renewOne("cb") { h.cbOk = true; h.cbRecovered = true; recovered.append("腾讯云"); self.cbAuthBlip = false }
+                else if authFail {
+                    h.cbNeedLogin = true; needLogin.append("腾讯云")
+                    /* 掉登「冷静期」：第一次判出认证失败先只提示、不抹凭证，
+                       下一次自检仍失败才真抹。防网关偶发 401/403（限流 / WAF /
+                       安全策略临时收紧）被当成凭证失效，一次性把登录态抹掉。 */
+                    if self.cbAuthBlip { self.forget("cb", "腾讯云") }
+                    else { self.cbAuthBlip = true }
+                }
                 else { h.cbOffline = true; offline.append("腾讯云") }
             }
             /* ---- Supabase ---- */
             if sbTokAtStart != nil {
                 let (ok, authFail) = self.probeSb()
-                if ok { h.sbOk = true }
-                else if self.renewOne("sb") { h.sbOk = true; h.sbRecovered = true; recovered.append("Supabase") }
-                else if authFail { h.sbNeedLogin = true; self.forget("sb", "Supabase"); needLogin.append("Supabase") }
+                if ok { h.sbOk = true; self.sbAuthBlip = false }
+                else if self.renewOne("sb") { h.sbOk = true; h.sbRecovered = true; recovered.append("Supabase"); self.sbAuthBlip = false }
+                else if authFail {
+                    h.sbNeedLogin = true; needLogin.append("Supabase")
+                    if self.sbAuthBlip { self.forget("sb", "Supabase") }
+                    else { self.sbAuthBlip = true }
+                }
                 else { h.sbOffline = true; offline.append("Supabase") }
             }
 
@@ -764,13 +775,23 @@ final class AppState: ObservableObject {
         if who == "cb" {
             cbToken = ""; cbRefresh = ""
             setMeta("cb_user", nil); setMeta("cb_admin", nil)
+            cbAuthBlip = false
             DispatchQueue.main.async { self.cbUser = nil; self.cbAdmin = false }
         } else {
             sbToken = ""; sbRefresh = ""
             setMeta("sb_user", nil); setMeta("sb_admin", nil)
+            sbAuthBlip = false
             DispatchQueue.main.async { self.sbUser = nil; self.sbAdmin = false }
         }
     }
+
+    /// 掉登「冷静期」标记（只放内存）：某台**第一次**判出认证失败时先只提示、
+    /// 不抹凭证；下一次自检仍失败才真抹。
+    /// 防的是网关偶发 401/403（限流 / WAF / 安全策略临时收紧）被误判成凭证失效 ——
+    /// 那会把用户的登录态从本机抹掉，且再也补不回来（只能手动重登）。
+    /// 抖动几秒就恢复的话，用户除了状态行闪一句提示，什么都不会失去。
+    private var cbAuthBlip = false
+    private var sbAuthBlip = false
 
     /* ================= 数据读取 ================= */
 
@@ -1043,9 +1064,11 @@ final class AppState: ObservableObject {
                     self.cbRefresh = a.refresh
                     self.setMeta("cb_user", user)
                     self.setMeta("cb_admin", admin)
+                    self.cbAuthBlip = false     // 刚登录成功，冷静期清零
                     DispatchQueue.main.async {
                         self.cbUser = user
                         self.cbAdmin = admin
+                        self.cbNeedLogin = false   // 刚登录成功，清掉上一轮自检的结论
                     }
                     parts.append(admin ? "腾讯云：管理员登录成功" : "腾讯云：登录成功（非管理员）")
                 } catch {
@@ -1061,9 +1084,11 @@ final class AppState: ObservableObject {
                     self.sbRefresh = a.refresh
                     self.setMeta("sb_user", a.user)
                     self.setMeta("sb_admin", admin)
+                    self.sbAuthBlip = false
                     DispatchQueue.main.async {
                         self.sbUser = a.user
                         self.sbAdmin = admin
+                        self.sbNeedLogin = false
                     }
                     parts.append(admin ? "Supabase：管理员登录成功" : "Supabase：登录成功（非管理员）")
                 } catch {
@@ -1095,6 +1120,7 @@ final class AppState: ObservableObject {
         }
         cbUser = nil; cbAdmin = false
         sbUser = nil; sbAdmin = false
+        cbAuthBlip = false; sbAuthBlip = false   // 主动登出，冷静期清零
     }
 
     /// 把底层网络异常翻成人话（与安卓端 Net.human 对齐）。

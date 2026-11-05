@@ -28,6 +28,11 @@ struct MineView: View {
             /* 进「我的」页 = 用户想看状态了。顺手体检一次（内部有 60 秒节流），
                掉线的话当场自动重连，状态行也会立刻变成「已自动重连」。 */
             app.checkSessions()
+            /* 仅用于 CI 截图：`-login` 启动参数直接弹出登录框，
+               好让流水线拍到「登录目标只剩腾讯云」的样子。不影响正常使用。 */
+            if ProcessInfo.processInfo.arguments.contains("-login"), !app.isLoggedIn {
+                showLogin = true
+            }
         }
     }
 
@@ -249,7 +254,9 @@ struct MineView: View {
            不加容差会出现「同一分钟里一台最新一台落后」的假警报。 */
         let newest = max(app.cbAt ?? .distantPast, app.sbAt ?? .distantPast)
         var tag = at.addingTimeInterval(Cloud.syncTol) >= newest ? "最新" : "落后"
-        if !logged { tag = "未登录 · " + tag }
+        /* 单后端时把「未登录」写成「（只读）」：数据读得到、只是不能写，
+           光写「未登录」会让人以为连数据都没读到。 */
+        if !logged { tag = (Cloud.sbUse ? "未登录 · " : "未登录（只读） · ") + tag }
         return tag + "（" + app.clockText(at) + "）"
     }
 

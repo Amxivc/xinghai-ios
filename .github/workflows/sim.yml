@@ -47,6 +47,11 @@ jobs:
           xcrun simctl launch "$DEV" com.xinghai.musicpub -tab 0 -person 崔峻嘉
           sleep 16
           xcrun simctl io "$DEV" screenshot shots/early_row.png
+          # 登录弹窗：验证「登录目标只剩腾讯云」不再是三选一（`-login` 让 App 启动即弹窗）
+          xcrun simctl terminate "$DEV" com.xinghai.musicpub || true
+          xcrun simctl launch "$DEV" com.xinghai.musicpub -tab 2 -login
+          sleep 8
+          xcrun simctl io "$DEV" screenshot shots/login.png
           # 回桌面截图：验证 App 图标是否正常显示
           xcrun simctl terminate "$DEV" com.xinghai.musicpub || true
           sleep 4

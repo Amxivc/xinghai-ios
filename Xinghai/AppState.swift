@@ -269,6 +269,12 @@ final class AppState: ObservableObject {
     /// v0.4.2 起读取是「两台都读、取最新的那份」，主 / 备之分已经不存在：
     /// 旧写法在只登录一台时会显示「Supabase」，而数据其实来自腾讯云，纯属误导。
     var sourceLabel: String {
+        /* 单后端（Supabase 已停用）：只有一台，「较新 / 只连上一台」这些比较都没意义 */
+        if !Cloud.sbUse {
+            if cbGot { return "腾讯云" }
+            if !persons.isEmpty { return "本地缓存" }
+            return "内置数据"
+        }
         if cbGot && sbGot {
             if Cloud.sameVersion(cbAt, sbAt) {
                 return "腾讯云 + Supabase（已一致）"
@@ -288,6 +294,8 @@ final class AppState: ObservableObject {
     ///   ② 两台时间戳相同     → 数据没差，只是改动写不进未登录那台
     ///   ③ 未登录那台确实旧   → 改动写不进它，它会一直是旧数据
     var halfLoginWarning: String? {
+        /* 单后端：没有「另一台」这回事了 */
+        guard Cloud.sbUse else { return nil }
         let hasCb = !cbToken.isEmpty, hasSb = !sbToken.isEmpty
         guard hasCb != hasSb else { return nil }
         let selfName = hasCb ? "腾讯云" : "Supabase"
@@ -313,9 +321,17 @@ final class AppState: ObservableObject {
                 cbUser = u
                 cbAdmin = d.bool(forKey: "cb_admin")
             }
-            if let u = d.string(forKey: "sb_user") {
+            if Cloud.sbUse, let u = d.string(forKey: "sb_user") {
                 sbUser = u
                 sbAdmin = d.bool(forKey: "sb_admin")
+            } else if !Cloud.sbUse {
+                /* 停用后旧版本留下的 sb 凭证不再恢复，顺手清掉，
+                   免得「我的」页算出已经不该存在的登录态 */
+                sbUser = nil; sbAdmin = false
+                d.removeObject(forKey: "sb_user")
+                d.removeObject(forKey: "sb_admin")
+                d.removeObject(forKey: "sb_token")
+                d.removeObject(forKey: "sb_refresh")
             }
         }
         loadCache()
@@ -381,8 +397,11 @@ final class AppState: ObservableObject {
         guard pending.isEmpty, let url = pendingUrl, let d = try? Data(contentsOf: url),
               let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: [String: Any]]
         else { return }
-        pending = j
+        /* 停用 Supabase 后，升级前留在盘上的 "sb" 任务直接丢掉，
+           否则它会一直卡在队列里，界面永远显示「待补写」。 */
+        pending = Cloud.sbUse ? j : j.filter { $0.key != "sb" }
         pendingTargets = pending.keys.sorted()
+        if pending.count != j.count { savePending() }
         if !pending.isEmpty { schedulePush(after: 1) }   // 一启动就试一次，不打扰用户
     }
 
@@ -399,6 +418,7 @@ final class AppState: ObservableObject {
 
     /// 记下「这台没写上」，稍后在后台补。同一台只留最新一份快照（后到的覆盖先到的）。
     private func enqueue(_ target: String, data: [String: Any], iso: String) {
+        if target == "sb" && !Cloud.sbUse { return }   // Supabase 已停用，不再排队
         pending[target] = ["iso": iso, "data": data]
         savePending()
         pendingTargets = pending.keys.sorted()
@@ -429,6 +449,8 @@ final class AppState: ObservableObject {
             var done: [(String, String)] = []      // (目标, 写出去的 iso)
             var lastErr = ""
             for (target, job) in jobs {
+                /* 停用 Supabase 后旧盘残留的 "sb" 任务直接丢掉 */
+                if target == "sb" && !Cloud.sbUse { done.append((target, "")); continue }
                 guard let data = job["data"] as? [String: Any],
                       let iso = job["iso"] as? String else {
                     done.append((target, ""))      // 残缺任务直接丢
@@ -468,7 +490,9 @@ final class AppState: ObservableObject {
 
                 if self.pending.isEmpty {
                     self.pushAttempt = 0
-                    if hadWork && !done.isEmpty { self.showToast("已补写到云端，两台已一致") }
+                    if hadWork && !done.isEmpty {
+                        self.showToast(Cloud.sbUse ? "已补写到云端，两台已一致" : "已补写到云端")
+                    }
                 } else {
                     self.pushAttempt += 1
                     self.schedulePush(after: self.pushBackoff[min(self.pushAttempt, self.pushBackoff.count - 1)])
@@ -547,13 +571,15 @@ final class AppState: ObservableObject {
                     /* 跨境那台交给后台，不阻塞、也不弹错 */
                     self.enqueue("sb", data: stamped, iso: iso)
                     self.cloudNote = self.buildNote(heal: nil)
-                    self.showToast(head + "（v\(ver) 已保存到腾讯云，正在同步 Supabase…）")
+                    self.showToast(Cloud.sbUse
+                        ? head + "（v\(ver) 已保存到腾讯云，正在同步 Supabase…）"
+                        : head + "（v\(ver) 已保存到腾讯云）")
                     self.schedulePush(after: 0.2)          // 正常情况这时就补上了
                     return
                 }
 
-                /* 腾讯云没写上：Supabase 也没登录的话，才是真失败 */
-                if sbTok.isEmpty {
+                /* 腾讯云没写上：Supabase 也没登录（或已停用）的话，才是真失败 */
+                if sbTok.isEmpty || !Cloud.sbUse {
                     /* 没写上就别白吃一个号 */
                     if self.curVer == ver {
                         self.curVer = ver - 1
@@ -647,8 +673,8 @@ final class AppState: ObservableObject {
                 }
                 else { h.cbOffline = true; offline.append("腾讯云") }
             }
-            /* ---- Supabase ---- */
-            if sbTokAtStart != nil {
+            /* ---- Supabase（已停用，见 Cloud.sbUse） ---- */
+            if Cloud.sbUse && sbTokAtStart != nil {
                 let (ok, authFail) = self.probeSb()
                 if ok { h.sbOk = true; self.sbAuthBlip = false }
                 else if self.renewOne("sb") { h.sbOk = true; h.sbRecovered = true; recovered.append("Supabase"); self.sbAuthBlip = false }
@@ -838,13 +864,17 @@ final class AppState: ObservableObject {
                 box.lock(); cbSnap = s; cbErr = e; box.unlock()
                 grp.leave()
             }
-            grp.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                var s: Cloud.Snap? = nil
-                var e = ""
-                do { s = try Cloud.sbReadSnap(fallbackToken: sbTok) } catch { e = AppState.translate(error) }
-                box.lock(); sbSnap = s; sbErr = e; box.unlock()
-                grp.leave()
+            /* Supabase 已停用：不再并行去连那台。境外链路本来就慢，
+               白等一次超时会直接拖慢首屏。 */
+            if Cloud.sbUse {
+                grp.enter()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var s: Cloud.Snap? = nil
+                    var e = ""
+                    do { s = try Cloud.sbReadSnap(fallbackToken: sbTok) } catch { e = AppState.translate(error) }
+                    box.lock(); sbSnap = s; sbErr = e; box.unlock()
+                    grp.leave()
+                }
             }
             grp.wait()
 
@@ -917,7 +947,9 @@ final class AppState: ObservableObject {
                     /* 读到云端规模 → 抬高「覆盖防护」基准 */
                     self.noteCloudSize(from: root)
                 } else if self.persons.isEmpty {
-                    self.banner = "云端读取失败（腾讯云与 Supabase 均未成功），且本地无缓存"
+                    self.banner = Cloud.sbUse
+                        ? "云端读取失败（腾讯云与 Supabase 均未成功），且本地无缓存"
+                        : "云端读取失败，且本地无缓存"
                     parsed = false
                 }
 
@@ -938,6 +970,21 @@ final class AppState: ObservableObject {
                 self.checkSessions()
 
                 /* 结束一定要有回话。以前同步完一声不吭，用户不知道好了没有。 */
+                /* 单后端：没有「两台核对」这回事，按「读到了没有」说话 */
+                if !Cloud.sbUse {
+                    let ok = self.cbGot
+                    guard manual || secs >= 3 || !ok else { return }
+                    if !self.pendingTargets.isEmpty {
+                        self.showToast("同步完成，但还有「"
+                            + self.pendingTargets.map { $0 == "cb" ? "腾讯云" : "Supabase" }.joined(separator: " / ")
+                            + "」待补写，正在后台重试")
+                    } else if ok && parsed {
+                        self.showToast("同步完成：已是最新数据")
+                    } else {
+                        self.showToast("同步失败：云端没读到（见上方状态）")
+                    }
+                    return
+                }
                 let both = self.cbGot && self.sbGot
                 guard manual || secs >= 3 || !both else { return }
                 if !self.pendingTargets.isEmpty {
@@ -1055,7 +1102,7 @@ final class AppState: ObservableObject {
             guard let self = self else { return }
             var parts: [String] = []
 
-            if mode == 0 || mode == 2 {
+            if mode == 0 || (Cloud.sbUse && mode == 2) {
                 do {
                     let a = try Cloud.cbSignIn(username: user, password: password)
                     // 与安卓端一致：管理员校验失败不阻断登录（否则网络抖动会被误报成登录失败）
@@ -1076,7 +1123,7 @@ final class AppState: ObservableObject {
                 }
             }
 
-            if mode == 1 || mode == 2 {
+            if Cloud.sbUse && (mode == 1 || mode == 2) {
                 do {
                     let a = try Cloud.sbSignIn(email: email, password: password)
                     let admin = (try? Cloud.sbIsAdmin(uid: a.uid, token: a.token)) ?? false

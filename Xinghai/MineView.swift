@@ -101,7 +101,8 @@ struct MineView: View {
             InfoRow(label: "数据版本",
                     value: app.curVer > 0 ? "v\(app.curVer)" : "首次保存后开始编号")
 
-            /* 两台服务器各自的状态：只同步上一台这件事，得让用户看得见 */
+            /* 两台服务器各自的状态：只同步上一台这件事，得让用户看得见。
+               Supabase 于 2026-11-04 停用，只剩腾讯云一台，就没必要再列一行「未登录」。 */
             HStack {
                 Text("腾讯云").font(.subheadline)
                 Spacer()
@@ -109,12 +110,14 @@ struct MineView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-            HStack {
-                Text("Supabase").font(.subheadline)
-                Spacer()
-                Text(serverState(cb: false))
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+            if Cloud.sbUse {
+                HStack {
+                    Text("Supabase").font(.subheadline)
+                    Spacer()
+                    Text(serverState(cb: false))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
             }
 
             if !app.cloudNote.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -255,7 +258,7 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.8（完整功能）")
+            InfoRow(label: "版本", value: "iOS 客户端 v0.5.9（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }
@@ -278,7 +281,7 @@ struct InfoRow: View {
 struct LoginSheet: View {
     @ObservedObject private var app = AppState.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var mode = 2
+    @State private var mode = Cloud.sbUse ? 2 : 0
     @State private var email = ""
     @State private var password = ""
     @State private var busy = false
@@ -288,13 +291,24 @@ struct LoginSheet: View {
     var body: some View {
         NavigationView {
             Form {
-                Picker("登录到", selection: $mode) {
-                    Text("腾讯云").tag(0)
-                    Text("Supabase").tag(1)
-                    Text("双端同时").tag(2)
+                /* Supabase 停用后「腾讯云 / Supabase / 双端同时」三选一没有意义了，
+                   收成一行只读说明；改回 Cloud.sbUse=true 时自动恢复分段控件。 */
+                if Cloud.sbUse {
+                    Picker("登录到", selection: $mode) {
+                        Text("腾讯云").tag(0)
+                        Text("Supabase").tag(1)
+                        Text("双端同时").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowBackground(Color.clear)
+                } else {
+                    HStack {
+                        Text("登录到")
+                        Spacer()
+                        Text("腾讯云（主服务器）")
+                            .foregroundColor(.secondary)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .listRowBackground(Color.clear)
 
                 Section {
                     TextField("邮箱（如 xxxxx@xx.com）", text: $email)

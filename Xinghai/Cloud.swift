@@ -427,6 +427,15 @@ enum Cloud {
         "iOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJ4aC15anhjYi1kNmc0bXUwYjY0YzFlMjZlNSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN" +
         "0ZW1fYWRtaW4iOmZhbHNlfQ.Drl3zM75XGMK_xkSRgJTIGZzy6xdT4sYajQft6euKeCwUC0Vzc0NAti4V8L3fVt9GYZlN2txkkoG4CMrMuGfNPY7ZFZJ8MdWxtPdMyTKyGh4pzbTa5LVJo4TBgZYt1rdd1lup2XS8mMdfvOVjPCiMrBiLlyErEAhdnB9LXx53KDGSXqqt_lyopRMWOBH_B9o-bRO4DQC5s15zWRoLQ6ZeikM32UHIw__bs3HtvVtSpU7yLm9dlkUgkUH0tbHmCa06srVzK4ZANbaUhnfex7y32q6nR5xbRQgnCppz04j-OgimFb79XT7GJ7z4dGhDVMwFyJVStR6C69ApBDkfjAkWw"
 
+    /// 是否启用 Supabase（第二台服务器）。
+    ///
+    /// 2026-11-04 起**停用**，与网页版 `SB_USE=false`、安卓 `Cloud.SB_USE=false` 对齐：
+    /// 用户明确要求「不要 Supabase 了，只想登录腾讯云」。
+    /// 关掉后：登录框只显示腾讯云；不读、不写、不自检 Supabase；
+    /// 「我的」页不再出现两台对比与「只连上一台」的告警。
+    /// **读取本来就不需要登录**（数据表所有人可读，用 anon key 直连），所以不影响看数据。
+    static let sbUse = false
+
     static let sbUrl = "https://jcaobupbubldipbrzfuo.supabase.co"
     static let sbKey = "sb_publishable_B0aV4XzeALxax8YqzedegQ_ZBu-ewgD"
 

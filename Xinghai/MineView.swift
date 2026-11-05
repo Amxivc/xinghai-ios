@@ -298,6 +298,30 @@ struct LoginSheet: View {
     var body: some View {
         NavigationView {
             Form {
+                /* 登录页头部：圆形头像 + 副标题。
+                   原来是直接甩出「登录到 + 邮箱 + 密码」，看着像设置项而不是登录页；
+                   和安卓 / 网页版统一成「头像 → 标题 → 输入 → 登录」这套读法。
+                   导航栏已写「管理员登录」，这里不再重复标题。 */
+                Section {
+                    VStack(spacing: 9) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.10))
+                                .frame(width: 62, height: 62)
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 26))
+                                .foregroundColor(.accentColor)
+                        }
+                        Text("登录后可编辑课表与工作安排")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                }
+
                 /* Supabase 停用后「腾讯云 / Supabase / 双端同时」三选一没有意义了，
                    收成一行只读说明；改回 Cloud.sbUse=true 时自动恢复分段控件。 */
                 if Cloud.sbUse {
@@ -310,9 +334,9 @@ struct LoginSheet: View {
                     .listRowBackground(Color.clear)
                 } else {
                     HStack {
-                        Text("登录到")
+                        Text("服务器")
                         Spacer()
-                        Text("腾讯云（主服务器）")
+                        Text("腾讯云 · 主服务器")
                             .foregroundColor(.secondary)
                     }
                 }
@@ -370,7 +394,7 @@ struct LoginSheet: View {
                     .disabled(busy)
                 }
             }
-            .navigationTitle("登录")
+            .navigationTitle("管理员登录")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

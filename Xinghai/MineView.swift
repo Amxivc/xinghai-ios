@@ -12,6 +12,12 @@ struct MineView: View {
                 accountSection
                 cloudSection
                 aboutSection
+                /* 给底部胶囊让位：NavigationView 不认外层的 safeAreaInset，
+                   不加这块列表内容会穿透到胶囊下面（能看到「单位」等文字压在胶囊上）。 */
+                Color.clear.frame(height: 78)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets())
             }
             .listStyle(.plain)
             .listRowBackground(Theme.paper)   /* 与安卓一致的暖纸底，不用系统灰 */

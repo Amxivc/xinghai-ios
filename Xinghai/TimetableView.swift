@@ -60,6 +60,7 @@ struct TimetableView: View {
             if let b = app.banner {
                 BannerView(text: b)
             }
+            bigTitle
             header
             Divider()
             if app.persons.isEmpty {
@@ -152,6 +153,25 @@ struct TimetableView: View {
     }
 
     /* ================= 顶部导航 ================= */
+
+    /// 安卓 NX 那行大标题：班级名（左）+「选择成员」（右）
+    private var bigTitle: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text((person?.cls.isEmpty == false ? person?.cls : nil) ?? "课表")
+                .font(.system(size: 27, weight: .bold))
+                .foregroundColor(Theme.ink)
+            Spacer()
+            Button { showMembers = true } label: {
+                Text("选择成员")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.blue)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+    }
 
     private var header: some View {
         HStack(spacing: 8) {

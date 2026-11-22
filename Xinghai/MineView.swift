@@ -267,7 +267,11 @@ struct MineView: View {
     private var aboutSection: some View {
         Section("关于") {
             InfoRow(label: "应用", value: "星海音教宣传部")
-            InfoRow(label: "版本", value: "iOS 客户端 v0.5.9（完整功能）")
+            /* ⚠ 不再写死版本号：原来固定 "v0.5.9"，升到 0.6.0 后页面还显示旧版本。
+               改成直接读 Bundle 的 CFBundleShortVersionString，跟着 project.yml 走。 */
+            InfoRow(label: "版本", value: "iOS 客户端 v" +
+                    ((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "—") +
+                    "（完整功能）")
             InfoRow(label: "单位", value: "星海音乐学院音乐教育学院")
         }
     }

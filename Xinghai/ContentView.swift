@@ -5,6 +5,8 @@ struct ContentView: View {
     @State private var tab = ContentView.launchTab
     @Environment(\.scenePhase) private var scenePhase
 
+    private let TAB = ["课表", "台历", "我的"]
+
     /// 调试用：启动参数 -tab 0/1/2 可直接打开指定页（云端模拟器截图用）
     static var launchTab: Int {
         if let idx = ProcessInfo.processInfo.arguments.drop(while: { $0 != "-tab" }).dropFirst().first {
@@ -14,17 +16,25 @@ struct ContentView: View {
     }
 
     var body: some View {
-        TabView(selection: $tab) {
-            TimetableView()
-                .tabItem { Label("课表", systemImage: "tablecells") }
-                .tag(0)
-            CalendarView()
-                .tabItem { Label("台历", systemImage: "calendar") }
-                .tag(1)
-            MineView()
-                .tabItem { Label("我的", systemImage: "person.crop.circle") }
-                .tag(2)
+        ZStack(alignment: .bottom) {
+            /* 不用系统 TabView —— 底部要换成可自定义的液态玻璃胶囊，
+               TabView 的 tabItem 无法接管成 glassEffect。 */
+            Group {
+                switch tab {
+                case 1:  CalendarView()
+                case 2:  MineView()
+                default: TimetableView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            /* 给胶囊让出位置，内容滚到底也不会被它压住 */
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 74) }
+
+            dockBar
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
         }
+        .background(Theme.paper.ignoresSafeArea())
         .overlay(alignment: .top) { toastView }
         .animation(.easeInOut(duration: 0.25), value: app.toast)
         .onChange(of: scenePhase) { phase in
@@ -41,16 +51,45 @@ struct ContentView: View {
         }
     }
 
+    /// 底部胶囊：iOS 26+ 走系统 Liquid Glass，旧系统降级为 ultraThinMaterial
+    private var dockBar: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<3, id: \.self) { i in
+                Button {
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { tab = i }
+                } label: {
+                    Text(TAB[i])
+                        .font(.system(size: 13, weight: tab == i ? .semibold : .regular))
+                        .foregroundColor(tab == i ? Theme.paper : Theme.ink2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .background {
+                            if tab == i {
+                                Capsule().fill(Theme.ink)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
+        .frame(height: 52)
+        .liquidGlassCapsule()
+        .shadow(color: Color.black.opacity(0.10), radius: 14, x: 0, y: 6)
+    }
+
     @ViewBuilder
     private var toastView: some View {
         if let t = app.toast {
             Text(t)
                 .font(.footnote)
-                .foregroundColor(.white)
+                .foregroundColor(Theme.paper)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
-                .background(Capsule().fill(Color.black.opacity(0.78)))
+                .background(Capsule().fill(Theme.ink.opacity(0.88)))
                 .padding(.horizontal, 24)
                 .padding(.top, 10)
                 .transition(.opacity)

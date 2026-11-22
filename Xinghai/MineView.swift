@@ -13,6 +13,8 @@ struct MineView: View {
                 cloudSection
                 aboutSection
             }
+            .listStyle(.plain)
+            .listRowBackground(Theme.paper)   /* 与安卓一致的暖纸底，不用系统灰 */
             .navigationTitle("我的")
         }
         .navigationViewStyle(.stack)

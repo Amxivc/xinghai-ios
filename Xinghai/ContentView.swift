@@ -51,21 +51,23 @@ struct ContentView: View {
         }
     }
 
-    /// 底部胶囊：iOS 26+ 走系统 Liquid Glass，旧系统降级为 ultraThinMaterial
+    /// 底部胶囊：观感对齐台历那排「全部/已完成/未完成」的原生分段控件 ——
+    /// 浅灰底 + **白色滑块** + 细阴影，选中项黑字、未选中灰字。
     private var dockBar: some View {
         HStack(spacing: 0) {
             ForEach(0..<3, id: \.self) { i in
                 Button {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { tab = i }
+                    withAnimation(.spring(response: 0.40, dampingFraction: 0.88)) { tab = i }
                 } label: {
                     Text(TAB[i])
                         .font(.system(size: 13, weight: tab == i ? .semibold : .regular))
-                        .foregroundColor(tab == i ? .white : Theme.ink2)
+                        .foregroundColor(tab == i ? Theme.ink : Theme.mut)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 42)
+                        .frame(height: 34)
                         .background {
                             if tab == i {
-                                Capsule().fill(Color(red: 0, green: 0.478, blue: 1))   /* 系统蓝 #007AFF，不用 accentColor 以免被环境 tint 吃掉 */
+                                Capsule().fill(Color.white)
+                                    .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
                             }
                         }
                         .contentShape(Capsule())
@@ -73,11 +75,11 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
-        .frame(height: 52)
-        .liquidGlassCapsuleTinted(Color.blue.opacity(0.10))
-        .shadow(color: Color.black.opacity(0.10), radius: 14, x: 0, y: 6)
+        .padding(3)
+        .frame(height: 40)
+        .background(Capsule().fill(Color(UIColor.tertiarySystemFill)))
+        .overlay(Capsule().stroke(Theme.hair, lineWidth: 0.6))
+        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
 
     @ViewBuilder

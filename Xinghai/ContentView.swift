@@ -66,8 +66,9 @@ struct ContentView: View {
                         .frame(height: 34)
                         .background {
                             if tab == i {
-                                Capsule().fill(Color.white)
-                                    .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+                                /* 滑块用半透明白：在玻璃底上能透出一点后面的颜色，才像同一块材质 */
+                                Capsule().fill(Color.white.opacity(0.82))
+                                    .shadow(color: .black.opacity(0.10), radius: 3, x: 0, y: 1)
                             }
                         }
                         .contentShape(Capsule())
@@ -77,9 +78,10 @@ struct ContentView: View {
         }
         .padding(3)
         .frame(height: 40)
-        .background(Capsule().fill(Color(UIColor.tertiarySystemFill)))
-        .overlay(Capsule().stroke(Theme.hair, lineWidth: 0.6))
-        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+        /* 液态玻璃底：iOS 26 走系统 glassEffect（真玻璃，会折射背后内容），
+           旧系统降级 ultraThinMaterial（磨砂）。绝不能再铺不透明灰 —— 那样就没有玻璃感。 */
+        .liquidGlassCapsule()
+        .shadow(color: Color.black.opacity(0.10), radius: 12, x: 0, y: 5)
     }
 
     @ViewBuilder

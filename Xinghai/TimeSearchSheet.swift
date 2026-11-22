@@ -113,7 +113,7 @@ struct TimeSearchSheet: View {
                     .font(.caption.weight(.medium))
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
-                    .background(h.items.isEmpty ? Color(Theme.paper2) : Color.blue.opacity(0.12))
+                    .background(h.items.isEmpty ? Theme.paper2 : Color.blue.opacity(0.12))
                     .foregroundColor(h.items.isEmpty ? .secondary : .blue)
                     .clipShape(Capsule())
             }
@@ -139,7 +139,7 @@ struct TimeSearchSheet: View {
                     Text(M.durationText(it.overlap))
                         .font(.caption2)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Color(Theme.paper2))
+                        .background(Theme.paper2)
                         .foregroundColor(.secondary)
                         .clipShape(Capsule())
                 }
@@ -147,7 +147,7 @@ struct TimeSearchSheet: View {
             }
         }
         .padding(13)
-        .background(h.items.isEmpty ? Color(Theme.paper2) : Color(.systemBackground))
+        .background(h.items.isEmpty ? Theme.paper2 : Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .stroke(Color(.systemGray5), lineWidth: 1))

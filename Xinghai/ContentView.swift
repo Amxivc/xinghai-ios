@@ -65,7 +65,7 @@ struct ContentView: View {
                         .frame(height: 42)
                         .background {
                             if tab == i {
-                                Capsule().fill(Theme.ink)
+                                Capsule().fill(Color(red: 0, green: 0.478, blue: 1))   /* 系统蓝 #007AFF，不用 accentColor 以免被环境 tint 吃掉 */
                             }
                         }
                         .contentShape(Capsule())
@@ -76,7 +76,7 @@ struct ContentView: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 4)
         .frame(height: 52)
-        .liquidGlassCapsuleTinted(Color.accentColor.opacity(0.10))
+        .liquidGlassCapsuleTinted(Color.blue.opacity(0.10))
         .shadow(color: Color.black.opacity(0.10), radius: 14, x: 0, y: 6)
     }
 

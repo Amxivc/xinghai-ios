@@ -85,7 +85,7 @@ struct ContentView: View {
         if let t = app.toast {
             Text(t)
                 .font(.footnote)
-                .foregroundTheme.paper
+                .foregroundColor(Theme.paper)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)

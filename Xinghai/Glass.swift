@@ -15,6 +15,17 @@ extension View {
         }
     }
 
+    /// 胶囊形液态玻璃 + 淡蓝 tint（底部导航用，呼应系统蓝）
+    @ViewBuilder
+    func liquidGlassCapsuleTinted(_ tint: Color) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.tint(tint).interactive(), in: .capsule)
+        } else {
+            self.background(Capsule().fill(.ultraThinMaterial))
+                .overlay(Capsule().fill(tint.opacity(0.35)))
+        }
+    }
+
     /// 胶囊形液态玻璃（用于小按钮 / 标签）
     @ViewBuilder
     func liquidGlassCapsule() -> some View {

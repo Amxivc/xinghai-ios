@@ -60,7 +60,7 @@ struct ContentView: View {
                 } label: {
                     Text(TAB[i])
                         .font(.system(size: 13, weight: tab == i ? .semibold : .regular))
-                        .foregroundColor(tab == i ? Theme.paper : Theme.ink2)
+                        .foregroundColor(tab == i ? .white : Theme.ink2)
                         .frame(maxWidth: .infinity)
                         .frame(height: 42)
                         .background {
@@ -76,7 +76,7 @@ struct ContentView: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 4)
         .frame(height: 52)
-        .liquidGlassCapsule()
+        .liquidGlassCapsuleTinted(Color.accentColor.opacity(0.10))
         .shadow(color: Color.black.opacity(0.10), radius: 14, x: 0, y: 6)
     }
 

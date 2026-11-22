@@ -28,7 +28,9 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             /* 给胶囊让出位置，内容滚到底也不会被它压住 */
-            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 74) }
+            /* 只留 24pt 余量：内容能滚到胶囊**下面**，玻璃才有东西可透、才看得出液态玻璃；
+               留 74pt 会把内容全推上去，胶囊背后永远是纯色，玻璃看起来就像死灰块。 */
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 22) }
 
             dockBar
                 .padding(.horizontal, 20)
@@ -81,6 +83,17 @@ struct ContentView: View {
         /* 液态玻璃底：iOS 26 走系统 glassEffect（真玻璃，会折射背后内容），
            旧系统降级 ultraThinMaterial（磨砂）。绝不能再铺不透明灰 —— 那样就没有玻璃感。 */
         .liquidGlassCapsule()
+        /* 液态玻璃的灵魂是「边缘高光」：上沿一道亮白、下沿转暗。
+           只靠 glassEffect/ultraThinMaterial 在纯色背景上几乎看不出玻璃感，
+           补这圈描边后无论在模拟器还是真机都像一块玻璃。 */
+        .overlay(
+            Capsule().stroke(
+                LinearGradient(
+                    colors: [Color.white.opacity(0.75), Color.white.opacity(0.10),
+                             Color.black.opacity(0.06)],
+                    startPoint: .top, endPoint: .bottom),
+                lineWidth: 1)
+        )
         .shadow(color: Color.black.opacity(0.10), radius: 12, x: 0, y: 5)
     }
 

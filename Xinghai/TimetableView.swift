@@ -426,7 +426,7 @@ struct TimetableView: View {
                     }
                     ForEach(1...M.periods.count, id: \.self) { p in
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(Color(UIColor.systemGroupedBackground))
+                            .fill(Theme.paper2)
                             .frame(width: colW, height: rowH)
                             .contentShape(Rectangle())
                             .onTapGesture { tapEmpty(day: day, section: p) }
@@ -486,9 +486,19 @@ struct TimetableView: View {
             Spacer(minLength: 0)
         }
         .padding(narrow ? 2 : 3)
+        .padding(.leading, 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 5).fill(c.color.opacity(0.16)))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(c.color.opacity(0.55), lineWidth: 0.8))
+        .background(RoundedRectangle(cornerRadius: 8).fill(c.color.opacity(0.13)))
+        /* 安卓 NX 的课程块是「浅色底 + 左侧同色细竖线」，不是整块填色 */
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(c.color)
+                .frame(width: 2.5)
+                .padding(.vertical, 5)
+                .padding(.leading, 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.color.opacity(0.26), lineWidth: 0.7))
     }
 }
 

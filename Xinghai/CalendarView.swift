@@ -372,7 +372,7 @@ struct CalendarView: View {
                     .font(.caption.weight(.medium))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color(UIColor.systemGray6))
+                    .background(Theme.paper2)
                     .foregroundColor(.primary)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
@@ -495,7 +495,7 @@ struct ExportSheet: View {
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 12)
-                                .background(Color(UIColor.systemGray6))
+                                .background(Theme.paper2)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
                         }
@@ -510,7 +510,7 @@ struct ExportSheet: View {
                                     .font(.caption.weight(.medium))
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 7)
-                                    .background(Color(UIColor.systemGray6))
+                                    .background(Theme.paper2)
                                     .foregroundColor(.primary)
                                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                             }
@@ -542,7 +542,7 @@ struct ExportSheet: View {
                             .font(.subheadline.weight(.medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .background(Color(UIColor.systemGray6))
+                            .background(Theme.paper2)
                             .foregroundColor(.primary)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
